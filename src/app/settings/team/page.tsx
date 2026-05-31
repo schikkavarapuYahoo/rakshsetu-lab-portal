@@ -27,6 +27,7 @@ type StaffStatus = "active" | "suspended" | "removed";
 interface Staff {
   staff_id: string;
   email: string;
+  username: string | null;
   display_name: string;
   role: StaffRole;
   status: StaffStatus;
@@ -212,6 +213,11 @@ function StaffRow({
           )}
         </div>
         <div className="truncate text-sm text-neutral-600">{staff.email}</div>
+        {staff.username && (
+          <div className="truncate text-xs text-neutral-500">
+            <span className="font-mono">@{staff.username}</span>
+          </div>
+        )}
         <div className="mt-0.5 text-xs text-neutral-500">
           {staff.last_login_at
             ? `Last login ${formatRelative(staff.last_login_at)}`
@@ -279,6 +285,7 @@ function AddStaffDialog({
   onCreated: () => void;
 }) {
   const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [name, setName] = useState("");
   const [role, setRole] = useState<StaffRole>("technician");
   const [pin, setPin] = useState("");
@@ -296,6 +303,7 @@ function AddStaffDialog({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           email: email.trim().toLowerCase(),
+          username: username.trim().toLowerCase() || undefined,
           display_name: name.trim(),
           role,
           pin,
@@ -338,6 +346,22 @@ function AddStaffDialog({
               placeholder="alice@yourlab.com"
               className="h-10"
             />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="staff-username">Username (optional)</Label>
+            <Input
+              id="staff-username"
+              type="text"
+              pattern="[a-z0-9._-]{3,32}"
+              value={username}
+              onChange={(e) => setUsername(e.target.value.toLowerCase())}
+              placeholder="alice.sharma"
+              className="h-10 font-mono"
+              maxLength={32}
+            />
+            <p className="text-xs text-neutral-500">
+              3-32 chars. Lowercase letters, digits, dot, underscore, hyphen. They can log in with either email OR username.
+            </p>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="staff-name">Full name *</Label>
@@ -437,6 +461,7 @@ function EditStaffDialog({
   onSaved: () => void;
 }) {
   const [name, setName] = useState(staff.display_name);
+  const [username, setUsername] = useState(staff.username ?? "");
   const [role, setRole] = useState<StaffRole>(staff.role);
   const [status, setStatus] = useState<"active" | "suspended">(
     staff.status === "suspended" ? "suspended" : "active",
@@ -455,6 +480,8 @@ function EditStaffDialog({
         display_name: name.trim(),
         role,
         status,
+        // Empty string is a valid "clear the username" signal.
+        username: username.trim().toLowerCase(),
       };
       if (pin) body.pin = pin;
 
@@ -499,6 +526,20 @@ function EditStaffDialog({
               value={name}
               onChange={(e) => setName(e.target.value)}
               className="h-10"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="edit-username">Username (optional)</Label>
+            <Input
+              id="edit-username"
+              type="text"
+              pattern="[a-z0-9._-]{3,32}"
+              value={username}
+              onChange={(e) => setUsername(e.target.value.toLowerCase())}
+              placeholder="leave blank to remove"
+              className="h-10 font-mono"
+              maxLength={32}
             />
           </div>
 

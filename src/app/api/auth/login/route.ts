@@ -36,8 +36,12 @@ import { MAX_EMAIL_LEN, MAX_PIN_LEN, MIN_PIN_LEN } from '@/server/limits';
 
 export const runtime = 'nodejs'; // bcryptjs needs Node, not Edge runtime
 
+// Accept EITHER `identifier` (preferred — email or username, system
+// figures out which) OR legacy `email` for backwards compat with
+// in-flight clients during the rollout.
 const LoginSchema = z.object({
-  email: z.string().email().max(MAX_EMAIL_LEN).toLowerCase(),
+  identifier: z.string().min(1).max(MAX_EMAIL_LEN).optional(),
+  email: z.string().max(MAX_EMAIL_LEN).optional(),
   pin: z.string().min(MIN_PIN_LEN).max(MAX_PIN_LEN),
 });
 
@@ -63,7 +67,7 @@ export async function POST(req: NextRequest) {
   }
 
   // Parse + validate input
-  let body: { email: string; pin: string };
+  let body: { identifier?: string; email?: string; pin: string };
   try {
     const json = await req.json();
     body = LoginSchema.parse(json);
@@ -71,13 +75,21 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid input' }, { status: 400 });
   }
 
+  // Resolve the identifier — accept email or username on the same field.
+  // The `email` body field is legacy; we treat it as just another identifier.
+  const rawIdentifier = (body.identifier ?? body.email ?? '').trim().toLowerCase();
+  if (!rawIdentifier) {
+    return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
+  }
+  const isEmail = rawIdentifier.includes('@');
+
   try {
     const db = adminDb();
 
-    // Look up staff by email (lowercased + validated above).
+    // Look up staff by email OR username — emails contain '@', usernames don't.
     const staffSnap = await db
       .collection('lab_staff')
-      .where('email', '==', body.email)
+      .where(isEmail ? 'email' : 'username', '==', rawIdentifier)
       .limit(1)
       .get();
     if (staffSnap.empty) {

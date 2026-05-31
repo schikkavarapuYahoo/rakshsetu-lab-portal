@@ -21,8 +21,17 @@ export const dynamic = "force-dynamic";
  *   - demote the only owner (would lock the lab out)
  *   - change a staff in a different lab (404 — looks like not found)
  */
+const USERNAME_PATTERN = /^[a-z0-9._-]{3,32}$/;
+
 const PatchStaffSchema = z.object({
   display_name: z.string().min(1).max(MAX_NAME_LEN).optional(),
+  /** Empty string clears the username. */
+  username: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .max(32)
+    .optional(),
   role: z.enum(["owner", "admin", "technician"]).optional(),
   status: z.enum(["active", "suspended"]).optional(),
   /** Optional PIN reset. Send only when the owner wants to change it. */
@@ -104,6 +113,31 @@ export async function PATCH(
     if (body.pin) {
       update.pin_hash = await bcrypt.hash(body.pin, 12);
       update.pin_rotated_at = FieldValue.serverTimestamp();
+    }
+    if (body.username !== undefined) {
+      const next = body.username.trim();
+      if (next === "") {
+        // Empty string clears the username (logging in by email only).
+        update.username = null;
+      } else {
+        if (!USERNAME_PATTERN.test(next)) {
+          return NextResponse.json(
+            { error: "Username must be 3-32 lowercase letters, digits, dot, underscore or hyphen" },
+            { status: 400 },
+          );
+        }
+        // Uniqueness check — only when changing to a non-empty value.
+        const clash = await db
+          .collection("lab_staff")
+          .where("username", "==", next)
+          .limit(1)
+          .get();
+        const taken = clash.docs.some((d) => d.id !== id);
+        if (taken) {
+          return NextResponse.json({ error: "Username is already taken" }, { status: 409 });
+        }
+        update.username = next;
+      }
     }
 
     await ref.update(update);

@@ -17,6 +17,7 @@ type StaffStatus = "active" | "suspended" | "removed";
 interface Staff {
   staff_id: string;
   email: string;
+  username: string | null;
   display_name: string;
   role: StaffRole;
   status: StaffStatus;
@@ -192,6 +193,11 @@ function StaffRow({
           )}
         </div>
         <div className="truncate text-xs text-neutral-600">{staff.email}</div>
+        {staff.username && (
+          <div className="truncate text-[11px] text-neutral-500 font-mono">
+            @{staff.username}
+          </div>
+        )}
         <div className="mt-0.5 text-[11px] text-neutral-500">
           {staff.last_login_at
             ? `Last login ${formatRelative(staff.last_login_at)}`
@@ -252,6 +258,7 @@ function AddStaffDialog({
   onCreated: () => void;
 }) {
   const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [name, setName] = useState("");
   const [role, setRole] = useState<StaffRole>("technician");
   const [pin, setPin] = useState("");
@@ -269,6 +276,7 @@ function AddStaffDialog({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           email: email.trim().toLowerCase(),
+          username: username.trim().toLowerCase() || undefined,
           display_name: name.trim(),
           role,
           pin,
@@ -307,6 +315,21 @@ function AddStaffDialog({
               onChange={(e) => setEmail(e.target.value)}
               placeholder="alice@yourlab.com"
             />
+          </div>
+          <div>
+            <label className="label">Username (optional)</label>
+            <input
+              className="input font-mono"
+              type="text"
+              pattern="[a-z0-9._-]{3,32}"
+              value={username}
+              onChange={(e) => setUsername(e.target.value.toLowerCase())}
+              placeholder="alice.sharma"
+              maxLength={32}
+            />
+            <p className="mt-1 text-xs text-neutral-500">
+              3-32 chars. lowercase letters / digits / . / _ / -. Can be used at login instead of email.
+            </p>
           </div>
           <div>
             <label className="label">Full name *</label>

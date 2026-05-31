@@ -41,6 +41,7 @@ export async function GET() {
       return {
         staff_id: d.id,
         email: data.email,
+        username: (data.username as string | undefined) || null,
         display_name: data.display_name || data.email,
         role: data.role,
         status: data.status,
@@ -80,8 +81,20 @@ export async function GET() {
  * uniqueness across the whole platform (every staff email is a global
  * login identifier — two labs can't have the same staff email).
  */
+// Usernames: 3-32 chars, lowercase letters, digits, dot, underscore,
+// hyphen. Globally unique across all labs (acts as a login identifier
+// alongside email).
+const USERNAME_PATTERN = /^[a-z0-9._-]{3,32}$/;
+
 const CreateStaffSchema = z.object({
   email: z.string().email().max(MAX_EMAIL_LEN).toLowerCase(),
+  username: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .regex(USERNAME_PATTERN, "Username must be 3-32 lowercase letters, digits, dot, underscore or hyphen")
+    .optional()
+    .or(z.literal("")),
   display_name: z.string().min(1).max(MAX_NAME_LEN).trim(),
   role: z.enum(["owner", "admin", "technician"]),
   pin: z.string().min(MIN_PIN_LEN).max(MAX_PIN_LEN),
@@ -111,18 +124,33 @@ export async function POST(req: NextRequest) {
   }
 
   const db = adminDb();
+  const username = body.username && body.username.length > 0 ? body.username : null;
 
   // Cross-platform email uniqueness.
-  const clash = await db
+  const emailClash = await db
     .collection("lab_staff")
     .where("email", "==", body.email)
     .limit(1)
     .get();
-  if (!clash.empty) {
+  if (!emailClash.empty) {
     return NextResponse.json(
       { error: "Email is already registered to another staff member" },
       { status: 409 },
     );
+  }
+  // Cross-platform username uniqueness (only when one is set).
+  if (username) {
+    const usernameClash = await db
+      .collection("lab_staff")
+      .where("username", "==", username)
+      .limit(1)
+      .get();
+    if (!usernameClash.empty) {
+      return NextResponse.json(
+        { error: "Username is already taken" },
+        { status: 409 },
+      );
+    }
   }
 
   try {
@@ -130,6 +158,7 @@ export async function POST(req: NextRequest) {
     const ref = await db.collection("lab_staff").add({
       lab_id: session.lab_id,
       email: body.email,
+      username,
       pin_hash: pinHash,
       display_name: body.display_name,
       role: body.role,
@@ -145,6 +174,7 @@ export async function POST(req: NextRequest) {
         staff: {
           staff_id: ref.id,
           email: body.email,
+          username,
           display_name: body.display_name,
           role: body.role,
           status: "active",

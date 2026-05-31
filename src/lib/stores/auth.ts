@@ -50,6 +50,14 @@ export const useAuthStore = create<AuthState>()(
                 lab_name: string;
                 lab_email?: string;
               };
+              /** Per-user identity inside the lab — added in the
+               *  multi-user rollout. Older sessions may not have it. */
+              staff?: {
+                staff_id: string;
+                display_name: string;
+                email: string;
+                role: "owner" | "admin" | "technician";
+              };
             }
           | {
               role: "rep" | "admin";
@@ -67,12 +75,26 @@ export const useAuthStore = create<AuthState>()(
         // role switcher in the avatar menu still works for demo
         // technician views.
         if (body.role === "lab") {
+          // Prefer the staff identity from the JWT (set in the new
+          // multi-user flow). Fall back to the lab's name + OWNER
+          // role for any legacy session issued before the migration.
+          const staff = body.staff;
+          const uiRole: User["role"] = staff
+            ? staff.role === "owner"
+              ? "OWNER"
+              : staff.role === "admin"
+                ? "ADMIN"
+                : "TECHNICIAN"
+            : "OWNER";
           set({
             currentUser: {
-              id: body.lab.lab_id,
-              name: body.lab.lab_name,
-              email: body.lab.lab_email ?? `${body.lab.lab_code.toLowerCase()}@lab.in`,
-              role: "OWNER",
+              id: staff?.staff_id ?? body.lab.lab_id,
+              name: staff?.display_name ?? body.lab.lab_name,
+              email:
+                staff?.email ??
+                body.lab.lab_email ??
+                `${body.lab.lab_code.toLowerCase()}@lab.in`,
+              role: uiRole,
             },
           });
         } else {

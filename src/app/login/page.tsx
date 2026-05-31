@@ -29,7 +29,7 @@ function LoginInner() {
   const searchParams = useSearchParams();
   const next = searchParams.get("next") || "/";
 
-  const [email, setEmail] = useState("");
+  const [identifier, setIdentifier] = useState("");
   const [pin, setPin] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -48,7 +48,7 @@ function LoginInner() {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          email: email.trim().toLowerCase(),
+          identifier: identifier.trim().toLowerCase(),
           pin,
         }),
       });
@@ -88,23 +88,23 @@ function LoginInner() {
               Sign in to your lab
             </h1>
             <p className="mt-1 text-sm text-neutral-500">
-              Use the email and PIN your lab owner gave you.
+              Sign in with your email or username and PIN.
             </p>
           </div>
 
           <form onSubmit={handleSubmit} method="post" className="space-y-4">
             <div className="space-y-1.5">
-              <Label htmlFor="email">Email</Label>
+              <Label htmlFor="identifier">Email or username</Label>
               <Input
-                id="email"
-                name="email"
-                type="email"
+                id="identifier"
+                name="identifier"
+                type="text"
                 autoComplete="username"
                 required
                 autoFocus
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@yourlab.com"
+                value={identifier}
+                onChange={(e) => setIdentifier(e.target.value)}
+                placeholder="you@yourlab.com or siddu.chikkavarapu"
                 className="h-10"
                 maxLength={120}
               />

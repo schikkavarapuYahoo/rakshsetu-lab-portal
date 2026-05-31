@@ -63,6 +63,7 @@ export async function GET(
       return {
         staff_id: d.id,
         email: data.email,
+        username: (data.username as string | undefined) || null,
         display_name: data.display_name || data.email,
         role: data.role,
         status: data.status,
@@ -104,8 +105,17 @@ export async function GET(
  * Admin-on-behalf-of: create a new staff member in a specific lab.
  * Same email uniqueness check as the lab-side route.
  */
+const USERNAME_PATTERN = /^[a-z0-9._-]{3,32}$/;
+
 const CreateSchema = z.object({
   email: z.string().email().max(MAX_EMAIL_LEN).toLowerCase(),
+  username: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .regex(USERNAME_PATTERN, "Username must be 3-32 lowercase letters, digits, dot, underscore or hyphen")
+    .optional()
+    .or(z.literal("")),
   display_name: z.string().min(1).max(MAX_NAME_LEN).trim(),
   role: z.enum(["owner", "admin", "technician"]),
   pin: z.string().min(MIN_PIN_LEN).max(MAX_PIN_LEN),
@@ -136,6 +146,8 @@ export async function POST(
     return NextResponse.json({ error: "Lab not found" }, { status: 404 });
   }
 
+  const username = body.username && body.username.length > 0 ? body.username : null;
+
   const emailClash = await db
     .collection("lab_staff")
     .where("email", "==", body.email)
@@ -147,12 +159,26 @@ export async function POST(
       { status: 409 },
     );
   }
+  if (username) {
+    const usernameClash = await db
+      .collection("lab_staff")
+      .where("username", "==", username)
+      .limit(1)
+      .get();
+    if (!usernameClash.empty) {
+      return NextResponse.json(
+        { error: "Username is already taken" },
+        { status: 409 },
+      );
+    }
+  }
 
   try {
     const pinHash = await bcrypt.hash(body.pin, 12);
     const ref = await db.collection("lab_staff").add({
       lab_id,
       email: body.email,
+      username,
       pin_hash: pinHash,
       display_name: body.display_name,
       role: body.role,
@@ -169,6 +195,7 @@ export async function POST(
         staff: {
           staff_id: ref.id,
           email: body.email,
+          username,
           display_name: body.display_name,
           role: body.role,
           status: "active",

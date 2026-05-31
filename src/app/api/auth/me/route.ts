@@ -43,6 +43,15 @@ export async function GET() {
           lab_logo_url: lab.lab_logo_url || '',
           plan: lab.plan || 'free',
         },
+        // Per-user identity inside the lab — the welcome message,
+        // avatar initials, and role-based UI hiding all attribute
+        // to THIS staff member, not the lab generically.
+        staff: {
+          staff_id: session.staff_id,
+          email: session.staff_email,
+          display_name: session.staff_display_name,
+          role: session.staff_role,
+        },
       });
     }
 
