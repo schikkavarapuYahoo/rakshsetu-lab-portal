@@ -2098,32 +2098,27 @@ function CollectSampleDialog({
     sampleNote?: string;
   }) => void;
 }) {
-  // Default sample ID derives from the report code (R20260028 →
-  // S20260028) so the tube label visibly mirrors the report it belongs
-  // to. Editable so labs with external numbering can override.
-  const defaultSampleId = report.reportCode.replace(/^R/, "S");
-  const [sampleId, setSampleId] = useState(defaultSampleId);
+  // Sample ID auto-derives from the report code (R20260028 →
+  // S20260028) so the tube label visibly mirrors the report it
+  // belongs to. Read-only — the technician copies this onto the tube
+  // exactly as shown; allowing edits here was a source of typos and
+  // mismatches with the report code, so the input is locked.
+  const sampleId = report.reportCode.replace(/^R/, "S");
   const [condition, setCondition] = useState<SampleCondition>("good");
   const [note, setNote] = useState("");
 
   // Reset when the dialog reopens (e.g. user cancelled and reopened).
   useEffect(() => {
     if (open) {
-      setSampleId(defaultSampleId);
       setCondition("good");
       setNote("");
     }
-  }, [open, defaultSampleId]);
+  }, [open]);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const trimmed = sampleId.trim();
-    if (!trimmed) {
-      toast.error("Sample ID is required");
-      return;
-    }
     onSubmit({
-      sampleId: trimmed,
+      sampleId,
       sampleCondition: condition,
       sampleNote: note.trim() || undefined,
     });
@@ -2150,14 +2145,14 @@ function CollectSampleDialog({
             <input
               id="sample-id"
               value={sampleId}
-              onChange={(e) => setSampleId(e.target.value)}
-              autoFocus
-              className="focus:border-brand-500 focus:ring-brand-500/20 w-full rounded-md border border-neutral-300 bg-white px-3 py-2 font-mono text-sm shadow-sm outline-none focus:ring-2"
+              readOnly
+              aria-readonly
+              className="w-full cursor-not-allowed rounded-md border border-neutral-200 bg-neutral-100 px-3 py-2 font-mono text-sm text-neutral-700 shadow-sm select-all focus:outline-none"
             />
             <p className="text-muted-foreground text-xs">
-              Defaults to{" "}
-              <span className="font-mono">{defaultSampleId}</span>. Edit if
-              your lab uses a different numbering system.
+              Auto-generated from the report code. Write{" "}
+              <span className="font-mono font-semibold">{sampleId}</span>{" "}
+              on the tube so it matches the report.
             </p>
           </div>
 
