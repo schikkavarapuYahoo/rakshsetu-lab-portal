@@ -128,6 +128,25 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Email is required for the first owner-staff login. Without it the
+  // lab would be unreachable post-migration.
+  const ownerEmail = (args.email || "").trim().toLowerCase();
+  if (!ownerEmail) {
+    console.error("--email is required (becomes the first owner staff's login email).");
+    process.exit(1);
+  }
+
+  // No other lab_staff may already use this email (cross-tenant uniqueness).
+  const emailClash = await db
+    .collection("lab_staff")
+    .where("email", "==", ownerEmail)
+    .limit(1)
+    .get();
+  if (!emailClash.empty) {
+    console.error(`Email ${ownerEmail} is already registered to another staff account.`);
+    process.exit(1);
+  }
+
   const pinHash = await bcrypt.hash(args.pin!, 12);
 
   // Match the shape `scripts/seed-emulator.ts` writes so the lab works
@@ -167,16 +186,32 @@ async function main(): Promise<void> {
     last_login_ip: null,
   });
 
+  // First owner staff entry — login email + PIN. The lab.pin_hash above
+  // is kept for backwards-compat with any callers that still read it,
+  // but the auth/login route now resolves staff by email.
+  const ownerStaffRef = await db.collection("lab_staff").add({
+    lab_id: labRef.id,
+    email: ownerEmail,
+    pin_hash: pinHash,
+    display_name: `${args.name} Owner`,
+    role: "owner",
+    status: "active",
+    created_at: FieldValue.serverTimestamp(),
+    created_by_staff_id: null, // provisioned, not added by another staff
+    last_login_at: null,
+  });
+
   console.log("───────────────────────────────────────────────");
   console.log("✓ Lab provisioned");
   console.log("───────────────────────────────────────────────");
   console.log(`  Lab ID:    ${labRef.id}`);
   console.log(`  Code:      ${labCode}`);
   console.log(`  Name:      ${args.name}`);
+  console.log(`  Owner ID:  ${ownerStaffRef.id}`);
   console.log("");
-  console.log("Share with the lab owner:");
-  console.log(`  Lab Code: ${labCode}`);
-  console.log(`  PIN:      ${args.pin}  (have them change it after first login)`);
+  console.log("Share with the lab owner — first login:");
+  console.log(`  Email: ${ownerEmail}`);
+  console.log(`  PIN:   ${args.pin}  (have them change it after first login)`);
   console.log("───────────────────────────────────────────────");
 }
 

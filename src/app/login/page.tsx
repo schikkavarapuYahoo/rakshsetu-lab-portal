@@ -29,7 +29,7 @@ function LoginInner() {
   const searchParams = useSearchParams();
   const next = searchParams.get("next") || "/";
 
-  const [labCode, setLabCode] = useState("");
+  const [email, setEmail] = useState("");
   const [pin, setPin] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -48,7 +48,7 @@ function LoginInner() {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          lab_code: labCode.trim().toUpperCase(),
+          email: email.trim().toLowerCase(),
           pin,
         }),
       });
@@ -88,25 +88,25 @@ function LoginInner() {
               Sign in to your lab
             </h1>
             <p className="mt-1 text-sm text-neutral-500">
-              Use the lab code and PIN your partner manager shared.
+              Use the email and PIN your lab owner gave you.
             </p>
           </div>
 
           <form onSubmit={handleSubmit} method="post" className="space-y-4">
             <div className="space-y-1.5">
-              <Label htmlFor="lab_code">Lab Code</Label>
+              <Label htmlFor="email">Email</Label>
               <Input
-                id="lab_code"
-                name="lab_code"
-                type="text"
+                id="email"
+                name="email"
+                type="email"
                 autoComplete="username"
                 required
                 autoFocus
-                value={labCode}
-                onChange={(e) => setLabCode(e.target.value.toUpperCase())}
-                placeholder="e.g. RAKSHDEMO"
-                className="h-10 font-mono tracking-wider uppercase"
-                maxLength={16}
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@yourlab.com"
+                className="h-10"
+                maxLength={120}
               />
             </div>
             <div className="space-y-1.5">

@@ -1,31 +1,44 @@
 import { NextRequest, NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
+import { FieldValue } from 'firebase-admin/firestore';
+
 import { adminDb } from '@/server/firebase-admin';
-import { createLabSession } from '@/server/auth/session';
+import { createLabSession, type LabStaffRole } from '@/server/auth/session';
 import { checkAttempt, recordFailedAttempt, clearAttempts } from '@/server/auth/throttle';
+import { MAX_EMAIL_LEN, MAX_PIN_LEN, MIN_PIN_LEN } from '@/server/limits';
 
 /**
  * POST /api/auth/login
  *
- * Body: { lab_code: string, pin: string }
+ * Body: { email: string, pin: string }
  *
- * Validates lab_code + PIN against `labs` collection. On success,
- * issues a JWT session cookie. Throttles brute-force attempts.
+ * Multi-user login (May 2026): each lab has multiple staff entries
+ * in the `lab_staff` collection. A staff member logs in with their
+ * email + PIN. We look up the staff doc by email, validate the PIN,
+ * read the associated lab, and issue a session that carries BOTH
+ * the lab tenancy AND the staff identity. Every audit stamp
+ * downstream attributes to the specific staff member, not "the lab"
+ * generically.
+ *
+ * The legacy lab-level `pin_hash` field on `labs/{id}` is no longer
+ * used at login — the migration script `migrate-to-multi-user.ts`
+ * copies it into the first owner staff doc before this flow takes
+ * effect.
  *
  * Security:
  *   - Constant-time PIN comparison via bcrypt (no timing oracle)
  *   - Attempts throttled per IP (5 fails → 15 min lockout)
- *   - Generic error messages (don't reveal whether lab_code exists)
+ *   - Generic error messages (don't reveal whether email exists)
  *   - PIN never logged or returned
- *   - Lab status checked (suspended labs can't log in)
+ *   - Lab status checked AND staff status checked
  */
 
 export const runtime = 'nodejs'; // bcryptjs needs Node, not Edge runtime
 
 const LoginSchema = z.object({
-  lab_code: z.string().min(4).max(16).regex(/^[A-Z0-9-]+$/, 'Invalid lab code format'),
-  pin: z.string().min(4).max(64),
+  email: z.string().email().max(MAX_EMAIL_LEN).toLowerCase(),
+  pin: z.string().min(MIN_PIN_LEN).max(MAX_PIN_LEN),
 });
 
 export async function POST(req: NextRequest) {
@@ -50,7 +63,7 @@ export async function POST(req: NextRequest) {
   }
 
   // Parse + validate input
-  let body: { lab_code: string; pin: string };
+  let body: { email: string; pin: string };
   try {
     const json = await req.json();
     body = LoginSchema.parse(json);
@@ -58,40 +71,36 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid input' }, { status: 400 });
   }
 
-  const lab_code = body.lab_code.toUpperCase();
-
   try {
     const db = adminDb();
 
-    // Look up lab by code
-    const snap = await db.collection('labs').where('lab_code', '==', lab_code).limit(1).get();
-    if (snap.empty) {
-      // Same generic error message regardless of whether lab exists.
-      // Prevents enumeration of valid lab codes.
+    // Look up staff by email (lowercased + validated above).
+    const staffSnap = await db
+      .collection('lab_staff')
+      .where('email', '==', body.email)
+      .limit(1)
+      .get();
+    if (staffSnap.empty) {
+      // Same generic message regardless of whether email exists.
       await recordFailedAttempt(throttleKey);
       return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
     }
 
-    const labDoc = snap.docs[0];
-    const lab = labDoc.data();
+    const staffDoc = staffSnap.docs[0]!;
+    const staff = staffDoc.data();
 
-    // Check lab status BEFORE checking PIN. Suspended labs can't log in
-    // regardless of correct PIN.
-    if (lab.status !== 'active') {
-      return NextResponse.json(
-        { error: 'Lab account is not active. Contact RakshSetu support.' },
-        { status: 403 }
-      );
+    if (staff.status !== 'active') {
+      // Don't leak the difference between "doesn't exist" and "suspended"
+      // for unauth callers — same 401.
+      await recordFailedAttempt(throttleKey);
+      return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
     }
 
     // Constant-time PIN comparison
-    const pinHash = lab.pin_hash;
+    const pinHash = staff.pin_hash;
     if (!pinHash || typeof pinHash !== 'string') {
-      // Lab doesn't have PIN set — admin error, lock them out
-      return NextResponse.json(
-        { error: 'Lab account misconfigured. Contact support.' },
-        { status: 403 }
-      );
+      console.error('[auth/login] staff doc missing pin_hash:', staffDoc.id);
+      return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
     }
 
     const valid = await bcrypt.compare(body.pin, pinHash);
@@ -100,20 +109,58 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
     }
 
+    // Load the associated lab. Staff with no lab_id is a data error.
+    const labId = staff.lab_id as string | undefined;
+    if (!labId) {
+      console.error('[auth/login] staff doc missing lab_id:', staffDoc.id);
+      return NextResponse.json({ error: 'Account misconfigured. Contact support.' }, { status: 403 });
+    }
+    const labRef = db.collection('labs').doc(labId);
+    const labDoc = await labRef.get();
+    if (!labDoc.exists) {
+      console.error('[auth/login] staff references missing lab:', labId);
+      return NextResponse.json({ error: 'Account misconfigured. Contact support.' }, { status: 403 });
+    }
+    const lab = labDoc.data()!;
+
+    // Suspended labs lock everyone out, regardless of correct PIN.
+    if (lab.status !== 'active') {
+      return NextResponse.json(
+        { error: 'Lab account is not active. Contact RakshSetu support.' },
+        { status: 403 }
+      );
+    }
+
     // Success — issue session
     await clearAttempts(throttleKey);
+
+    const staffRole: LabStaffRole =
+      staff.role === 'owner' || staff.role === 'admin' || staff.role === 'technician'
+        ? (staff.role as LabStaffRole)
+        : 'technician';
 
     await createLabSession({
       lab_id: labDoc.id,
       lab_code: lab.lab_code,
       lab_name: lab.lab_name || 'Lab',
+      staff_id: staffDoc.id,
+      staff_email: staff.email,
+      staff_display_name: staff.display_name || staff.email,
+      staff_role: staffRole,
     });
 
-    // Update last_login_at and last_login_ip for audit
-    await labDoc.ref.update({
-      last_login_at: new Date(),
-      last_login_ip: ip,
-    });
+    // Update last_login on both the lab (for admin's "last activity"
+    // view) and the staff doc (for the team page).
+    await Promise.all([
+      labRef.update({
+        last_login_at: new Date(),
+        last_login_ip: ip,
+      }),
+      staffDoc.ref.update({
+        last_login_at: FieldValue.serverTimestamp(),
+        last_login_ip: ip,
+      }),
+    ]);
 
     return NextResponse.json({
       ok: true,
@@ -124,6 +171,12 @@ export async function POST(req: NextRequest) {
         lab_address: lab.lab_address || '',
         lab_phone: lab.lab_phone || '',
         lab_email: lab.lab_email || '',
+      },
+      staff: {
+        staff_id: staffDoc.id,
+        email: staff.email,
+        display_name: staff.display_name || staff.email,
+        role: staffRole,
       },
     });
   } catch (err) {

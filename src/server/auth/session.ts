@@ -52,11 +52,21 @@ export interface BaseSessionPayload {
   role: UserRole;
 }
 
+/** Per-staff role within a lab. Determines what they can see/do inside the lab portal. */
+export type LabStaffRole = 'owner' | 'admin' | 'technician';
+
 export interface LabSessionPayload extends BaseSessionPayload {
   role: 'lab';
+  /** Lab tenant identity */
   lab_id: string;
   lab_code: string;
   lab_name: string;
+  /** Per-user identity inside the lab — used for audit attribution
+   *  and role-based UI. Added in the multi-user rollout (May 2026). */
+  staff_id: string;
+  staff_email: string;
+  staff_display_name: string;
+  staff_role: LabStaffRole;
 }
 
 export interface StaffSessionPayload extends BaseSessionPayload {
@@ -73,12 +83,20 @@ export async function createLabSession(payload: {
   lab_id: string;
   lab_code: string;
   lab_name: string;
+  staff_id: string;
+  staff_email: string;
+  staff_display_name: string;
+  staff_role: LabStaffRole;
 }) {
   await issueCookie({
     role: 'lab',
     lab_id: payload.lab_id,
     lab_code: payload.lab_code,
     lab_name: payload.lab_name,
+    staff_id: payload.staff_id,
+    staff_email: payload.staff_email,
+    staff_display_name: payload.staff_display_name,
+    staff_role: payload.staff_role,
   });
 }
 

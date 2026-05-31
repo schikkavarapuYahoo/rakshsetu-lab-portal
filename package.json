@@ -20,7 +20,8 @@
     "emu:wipe": "FIRESTORE_EMULATOR_HOST=localhost:8080 FIREBASE_AUTH_EMULATOR_HOST=localhost:9099 GCLOUD_PROJECT=demo-rakshsetu tsx scripts/wipe-data.ts",
     "ops:provision-lab": "tsx scripts/provision-lab.ts",
     "ops:rotate-pin": "tsx scripts/rotate-pin.ts",
-    "ops:create-admin": "tsx scripts/create-admin.ts"
+    "ops:create-admin": "tsx scripts/create-admin.ts",
+    "ops:migrate-multi-user": "tsx scripts/migrate-to-multi-user.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.4.1",
