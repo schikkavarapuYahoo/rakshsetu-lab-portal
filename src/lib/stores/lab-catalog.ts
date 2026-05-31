@@ -396,7 +396,33 @@ export const useLabCatalogStore = create<LabCatalogState>()(
         // seeded catalog so the lab sees the 47 master tests. The next
         // mutation will write the snapshot for the first time.
         if (tests.length === 0) return;
-        set({ tests });
+        // Self-heal master-sourced tests that were persisted with an empty
+        // parameters array (real data we've seen in pilot labs — a saved
+        // catalog row with `parameters: []` for CBC means new reports get
+        // no parameter rows, no units, no ranges). Master-sourced rows are
+        // always derivable from the master library by code, so an empty
+        // array is unambiguously a data bug worth quietly fixing on read.
+        // Custom tests are left alone — empty there is a user choice.
+        const healed = tests.map((t) => {
+          if (
+            t.source === "master" &&
+            t.masterCode &&
+            (t.parameters?.length ?? 0) === 0
+          ) {
+            const master = MASTER_TEST_BY_CODE[t.masterCode];
+            if (master) {
+              return { ...t, parameters: master.parameters.map((p) => ({ ...p })) };
+            }
+          }
+          return t;
+        });
+        set({ tests: healed });
+        // Persist the heal so the server snapshot matches what every
+        // client now sees, and so future hydrations are no-ops. Fire and
+        // forget — a failed save just means the next hydration will heal
+        // again, which is harmless.
+        const anyHealed = healed.some((h, i) => h !== tests[i]);
+        if (anyHealed) persistCatalogRemote(healed);
       },
     }),
     {

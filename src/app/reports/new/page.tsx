@@ -193,6 +193,7 @@ function NewReportContent() {
   const patients = usePatientsStore((s) => s.patients);
   const setVitals = usePatientsStore((s) => s.setVitals);
   const addReports = useReportsStore((s) => s.addReports);
+  const allReports = useReportsStore((s) => s.reports);
   const allLabTests = useLabCatalogStore((s) => s.tests);
 
   const patientOptions = useMemo(
@@ -283,19 +284,73 @@ function NewReportContent() {
     () => patients.find((p) => p.id === watchedPatientId),
     [patients, watchedPatientId],
   );
+  // Most recent prior visit's check-in snapshot for this patient. Skips
+  // cancelled reports (which often have no real check-in) and prefers
+  // the highest createdAt. Used to prefill BP, pulse, temp, fasting,
+  // and pregnancy fields so the receptionist only needs to update
+  // what actually changed since the last visit.
+  const previousCheckIn = useMemo(() => {
+    if (!watchedPatientId) return undefined;
+    const candidates = allReports
+      .filter(
+        (r) =>
+          r.patientId === watchedPatientId &&
+          r.status !== "Cancelled" &&
+          r.checkIn,
+      )
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+    return candidates[0]?.checkIn;
+  }, [allReports, watchedPatientId]);
   useEffect(() => {
     if (!selectedPatient) return;
-    const currentH = form.getValues("heightCm") ?? "";
-    const currentW = form.getValues("weightKg") ?? "";
     // Only fill if the field is empty — don't clobber a value the
-    // receptionist just typed.
-    if (currentH === "" && typeof selectedPatient.heightCm === "number") {
-      form.setValue("heightCm", String(selectedPatient.heightCm));
+    // receptionist just typed. Same rule applies to every field below.
+    const fillIfEmpty = (name: keyof ReportFormValues, value: unknown) => {
+      const current = form.getValues(name);
+      if ((current === "" || current === undefined) && value !== undefined) {
+        form.setValue(name, value as never);
+      }
+    };
+    // Persistent vitals carry on the patient record itself.
+    if (typeof selectedPatient.heightCm === "number") {
+      fillIfEmpty("heightCm", String(selectedPatient.heightCm));
     }
-    if (currentW === "" && typeof selectedPatient.weightKg === "number") {
-      form.setValue("weightKg", String(selectedPatient.weightKg));
+    if (typeof selectedPatient.weightKg === "number") {
+      fillIfEmpty("weightKg", String(selectedPatient.weightKg));
     }
-  }, [selectedPatient, form]);
+    // Visit-level vitals come from the most recent prior visit's
+    // snapshot. Symptoms is intentionally NOT carried over — it's the
+    // chief complaint for today's visit, not a recurring vital.
+    if (previousCheckIn) {
+      fillIfEmpty(
+        "bpSystolic",
+        typeof previousCheckIn.bpSystolic === "number"
+          ? String(previousCheckIn.bpSystolic)
+          : undefined,
+      );
+      fillIfEmpty(
+        "bpDiastolic",
+        typeof previousCheckIn.bpDiastolic === "number"
+          ? String(previousCheckIn.bpDiastolic)
+          : undefined,
+      );
+      fillIfEmpty(
+        "pulseBpm",
+        typeof previousCheckIn.pulseBpm === "number"
+          ? String(previousCheckIn.pulseBpm)
+          : undefined,
+      );
+      fillIfEmpty(
+        "temperatureF",
+        typeof previousCheckIn.temperatureF === "number"
+          ? String(previousCheckIn.temperatureF)
+          : undefined,
+      );
+      fillIfEmpty("fastingStatus", previousCheckIn.fastingStatus);
+      fillIfEmpty("isPregnant", previousCheckIn.isPregnant);
+      fillIfEmpty("lmpDate", previousCheckIn.lmpDate);
+    }
+  }, [selectedPatient, previousCheckIn, form]);
 
   // Pregnancy + LMP only make sense for female patients of reproductive
   // age. Conservative range — ask anyway in unclear cases (e.g. age 11
@@ -1009,9 +1064,12 @@ function NewReportContent() {
                   </h2>
                   <p className="text-muted-foreground mt-0.5 text-xs">
                     {selectedPatient
-                      ? typeof selectedPatient.heightCm === "number" ||
+                      ? previousCheckIn ||
+                        typeof selectedPatient.heightCm === "number" ||
                         typeof selectedPatient.weightKg === "number"
-                        ? "Last-known height / weight prefilled. Refresh anything that changed today and capture today's vitals below."
+                        ? previousCheckIn
+                          ? "Vitals carried over from the last visit. Update anything that changed today."
+                          : "Last-known height / weight prefilled. Capture today's vitals below."
                         : "First time recording vitals for this patient — leave blank if unknown."
                       : "Select a patient first to prefill their last-known vitals."}
                   </p>

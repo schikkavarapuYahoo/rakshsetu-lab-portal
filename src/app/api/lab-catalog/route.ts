@@ -23,19 +23,17 @@ export const dynamic = "force-dynamic";
  * vanishingly rare. Promote to one-doc-per-test if that changes.
  */
 
+// Parameter shape matches `MasterTestParameter` (and the lab catalog
+// store's local copy) — single `parameter` name field, no separate
+// code/name split. An earlier draft of this route validated against
+// a different shape (`code` + `name`), which silently rejected every
+// non-empty parameter list and left labs with `parameters: []` even
+// for master-sourced tests — the catalog's hydration heal now puts
+// the master parameters back, and this schema lets them persist.
 const ParameterSchema = z.object({
-  code: z.string().max(64),
-  name: z.string().max(200),
+  parameter: z.string().min(1).max(200),
   unit: z.string().max(40).optional(),
   referenceRange: z.string().max(200).optional(),
-  flagRules: z
-    .object({
-      low: z.number().optional(),
-      high: z.number().optional(),
-      criticalLow: z.number().optional(),
-      criticalHigh: z.number().optional(),
-    })
-    .optional(),
 });
 
 const AuditStampSchema = z.object({

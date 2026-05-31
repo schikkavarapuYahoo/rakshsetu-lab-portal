@@ -264,6 +264,15 @@ export interface Report {
   sampleNote?: string;
 
   /**
+   * Per-report TAT override in minutes, anchored to the Sample Collected
+   * timestamp. When set, the countdown chip and the overdue notifier use
+   * this instead of the catalog test's `turnaroundMinutes`. Lets a
+   * technician say "give this one 90 minutes — analyzer is backed up"
+   * without editing the lab-wide catalog. Unset = fall back to catalog.
+   */
+  tatMinutes?: number;
+
+  /**
    * Snapshot of the patient's check-in state for this visit. Same
    * snapshot is duplicated across every report in the visit (cheap copy;
    * eliminates the need for a separate Visit entity for now). When the
@@ -762,6 +771,8 @@ export interface CollectSampleOpts extends TransitionOpts {
   sampleId?: string;
   sampleCondition?: SampleCondition;
   sampleNote?: string;
+  /** Per-report TAT override (minutes). Overrides catalog TAT. */
+  tatMinutes?: number;
 }
 
 interface SendToPatientOpts {
@@ -786,11 +797,36 @@ interface ReportsState {
   collectSample: (id: string, opts?: CollectSampleOpts) => Report;
   startTesting: (id: string, opts?: TransitionOpts) => Report;
   sendForReview: (id: string, opts?: TransitionOpts) => Report;
+  /**
+   * Reverse-arrow transition: Review → Waiting for Results. Use when the
+   * reviewer (or the same tech catching their own mistake) needs to fix
+   * a value before publishing. Both the original move-to-Review and this
+   * move-back land in the audit trail so the round-trip is visible.
+   */
+  reopenForCorrection: (id: string, opts?: TransitionOpts) => Report;
+  /**
+   * Amend a previously-published report. Moves status back to "Waiting
+   * for Results" so the value can be corrected, and stamps the audit
+   * trail with `Amendment: <reason>`. Requires a reason — without it
+   * NABL's "every amendment must be justified" rule isn't satisfied.
+   * On the next publish, the print template renders an AMENDED stamp
+   * and the version count is inferred from the number of Published
+   * entries in `statusHistory`.
+   */
+  amendPublished: (id: string, reason: string) => Report;
   publish: (id: string, opts?: TransitionOpts) => Report;
   cancel: (id: string, opts?: TransitionOpts) => Report;
 
   acknowledgeCriticals: (id: string) => Report;
   sendToPatient: (id: string, opts: SendToPatientOpts) => Report;
+
+  /**
+   * Drop the per-report TAT override so the countdown falls back to the
+   * catalog's `turnaroundMinutes`. Sends a sentinel `null` to the server
+   * (translated to FieldValue.delete()) — distinct from `updateReport`,
+   * which strips undefineds and can't actually clear a persisted field.
+   */
+  clearTatMinutes: (id: string) => Report;
 
   // Payment
   recordPayment: (id: string, input: NewPaymentInput) => Report;
@@ -842,6 +878,33 @@ function persistReportRemote(report: Report): void {
     }
   }).catch((err) => {
     console.warn(`[reports] PATCH ${id} threw:`, err);
+  });
+}
+
+/**
+ * Variant of `persistReportRemote` that passes `null` as a sentinel to the
+ * server's PATCH route (translated to FieldValue.delete()), so a persisted
+ * field actually goes away. The plain version stringifies undefined to
+ * nothing, which can't clear.
+ */
+function persistReportFieldClearRemote(
+  report: Report,
+  nullableFields: string[],
+): void {
+  const { id, reportCode: _r, ...patch } = report;
+  void _r;
+  const body: Record<string, unknown> = { ...patch };
+  for (const k of nullableFields) body[k] = null;
+  void fetch(`/api/lab-reports/${id}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  }).then((res) => {
+    if (!res.ok) {
+      console.warn(`[reports] PATCH (clear) ${id} failed: ${res.status}`);
+    }
+  }).catch((err) => {
+    console.warn(`[reports] PATCH (clear) ${id} threw:`, err);
   });
 }
 
@@ -1027,18 +1090,30 @@ export const useReportsStore = create<ReportsState>()(
           // tube label, a condition flag, and a free-form note for any
           // collection quirks. Default sampleId derives from the report
           // code so the tube is obviously linked to the report.
-          if (!opts?.sampleId && !opts?.sampleCondition && !opts?.sampleNote) {
+          if (
+            !opts?.sampleId &&
+            !opts?.sampleCondition &&
+            !opts?.sampleNote &&
+            typeof opts?.tatMinutes !== "number"
+          ) {
             return updated;
           }
           const sampleId =
             opts?.sampleId?.trim() ||
             updated.reportCode.replace(/^R/, "S");
           const stamp = currentStamp();
+          const tatMinutes =
+            typeof opts?.tatMinutes === "number" &&
+            Number.isFinite(opts.tatMinutes) &&
+            opts.tatMinutes > 0
+              ? Math.round(opts.tatMinutes)
+              : updated.tatMinutes;
           const next: Report = {
             ...updated,
             sampleId,
             sampleCondition: opts?.sampleCondition ?? updated.sampleCondition,
             sampleNote: opts?.sampleNote?.trim() || updated.sampleNote,
+            tatMinutes,
             updatedAt: stamp.at,
             updatedBy: stamp,
           };
@@ -1054,17 +1129,115 @@ export const useReportsStore = create<ReportsState>()(
 
         sendForReview: (id, opts) => {
           const existing = get().reports.find((r) => r.id === id);
-          if (existing && existing.results.length === 0) {
-            throw new Error(
-              "Add at least one result row before sending for review",
+          if (existing) {
+            // Reject empty arrays AND arrays of only empty-value rows.
+            // The latter is the realistic mistake: technician added a
+            // row "Hemoglobin" but never typed a value, then hit Mark
+            // Ready for Review. The UI guards this too; this is the
+            // store-side belt for any programmatic caller.
+            const hasAnyValue = existing.results.some(
+              (r) => r.value.trim() !== "",
             );
+            if (!hasAnyValue) {
+              throw new Error(
+                "Enter at least one result value before sending for review",
+              );
+            }
           }
           return applyTransition(id, "Review", opts);
+        },
+
+        amendPublished: (id, reason) => {
+          const existing = get().reports.find((r) => r.id === id);
+          if (!existing) throw new Error(`Report not found: ${id}`);
+          if (existing.status !== "Published") {
+            throw new Error(
+              `Can only amend a Published report (currently ${existing.status})`,
+            );
+          }
+          const trimmed = reason.trim();
+          if (!trimmed) {
+            throw new Error("Amendment reason is required");
+          }
+          // Bypasses applyTransition. The status moves Published →
+          // Waiting for Results so the editor reopens; the audit entry
+          // uses the `Amendment: <reason>` convention so the print
+          // template (and any future amendment-only view) can pick it
+          // up by parsing the note prefix.
+          const stamp = currentStamp();
+          const historyEntry: StatusHistoryEntry = {
+            status: "Waiting for Results",
+            at: stamp.at,
+            by: stamp,
+            note: `Amendment: ${trimmed}`,
+          };
+          const updated: Report = {
+            ...existing,
+            status: "Waiting for Results",
+            statusHistory: [...existing.statusHistory, historyEntry],
+            updatedAt: stamp.at,
+            updatedBy: stamp,
+          };
+          set((state) => ({
+            reports: state.reports.map((r) => (r.id === id ? updated : r)),
+          }));
+          persistReportRemote(updated);
+          return updated;
+        },
+
+        reopenForCorrection: (id, opts) => {
+          const existing = get().reports.find((r) => r.id === id);
+          if (!existing) throw new Error(`Report not found: ${id}`);
+          if (existing.status !== "Review") {
+            throw new Error(
+              `Can only reopen from Review (currently ${existing.status})`,
+            );
+          }
+          // Bypasses applyTransition's NEXT_STATUS check — this is the
+          // sole sanctioned reverse-arrow in the workflow.
+          const stamp = currentStamp();
+          const historyEntry: StatusHistoryEntry = {
+            status: "Waiting for Results",
+            at: stamp.at,
+            by: stamp,
+            note: opts?.note ?? "Reopened for correction",
+          };
+          const updated: Report = {
+            ...existing,
+            status: "Waiting for Results",
+            statusHistory: [...existing.statusHistory, historyEntry],
+            updatedAt: stamp.at,
+            updatedBy: stamp,
+          };
+          set((state) => ({
+            reports: state.reports.map((r) => (r.id === id ? updated : r)),
+          }));
+          persistReportRemote(updated);
+          return updated;
         },
 
         publish: (id, opts) => applyTransition(id, "Published", opts),
 
         cancel: (id, opts) => applyTransition(id, "Cancelled", opts),
+
+        clearTatMinutes: (id) => {
+          const existing = get().reports.find((r) => r.id === id);
+          if (!existing) throw new Error(`Report not found: ${id}`);
+          if (typeof existing.tatMinutes !== "number") return existing;
+          const stamp = currentStamp();
+          const { tatMinutes: _t, ...rest } = existing;
+          void _t;
+          const updated: Report = {
+            ...rest,
+            updatedAt: stamp.at,
+            updatedBy: stamp,
+          };
+          set((state) => ({
+            reports: state.reports.map((r) => (r.id === id ? updated : r)),
+          }));
+          persistReportFieldClearRemote(updated, ["tatMinutes"]);
+          return updated;
+        },
 
         acknowledgeCriticals: (id) => {
           const existing = get().reports.find((r) => r.id === id);

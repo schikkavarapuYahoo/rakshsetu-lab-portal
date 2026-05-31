@@ -72,14 +72,21 @@ export function getTatState(
   if (!ACTIVE_STATUSES.has(report.status)) {
     return { status: "not-applicable", dueBy: null, minutesUntilDue: null };
   }
-  if (!labTest || typeof labTest.turnaroundMinutes !== "number") {
+  // Per-report override wins over the catalog default — technicians use this
+  // when a particular run is faster or slower than the lab-wide expectation
+  // (e.g. analyzer queue backed up, urgent stat sample).
+  const tatMinutes =
+    typeof report.tatMinutes === "number" && report.tatMinutes > 0
+      ? report.tatMinutes
+      : labTest?.turnaroundMinutes;
+  if (typeof tatMinutes !== "number") {
     return { status: "not-applicable", dueBy: null, minutesUntilDue: null };
   }
   const collectedAt = getCollectedAtTimestamp(report);
   if (collectedAt === null) {
     return { status: "not-applicable", dueBy: null, minutesUntilDue: null };
   }
-  const dueByMs = collectedAt + labTest.turnaroundMinutes * 60_000;
+  const dueByMs = collectedAt + tatMinutes * 60_000;
   const minutesUntilDue = Math.round((dueByMs - now) / 60_000);
 
   let status: TatStatus = "on-track";
@@ -88,7 +95,7 @@ export function getTatState(
   } else {
     // "Due soon" = the last 25% of the TAT window, with a 10-minute floor
     // so very short TATs (e.g. urine routine, 30 min) still get a warning.
-    const soonWindow = Math.max(10, Math.floor(labTest.turnaroundMinutes / 4));
+    const soonWindow = Math.max(10, Math.floor(tatMinutes / 4));
     if (minutesUntilDue <= soonWindow) status = "due-soon";
   }
 

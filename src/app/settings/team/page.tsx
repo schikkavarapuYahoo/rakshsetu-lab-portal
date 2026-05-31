@@ -6,6 +6,7 @@ import {
   AlertCircle,
   ArrowLeft,
   CheckCircle2,
+  Info,
   Loader2,
   Plus,
   ShieldCheck,
@@ -20,6 +21,8 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useRoleGuard } from "@/hooks/use-role-guard";
+import { useAuthStore } from "@/lib/stores/auth";
 
 type StaffRole = "owner" | "admin" | "technician";
 type StaffStatus = "active" | "suspended" | "removed";
@@ -36,6 +39,15 @@ interface Staff {
 }
 
 export default function TeamPage() {
+  // Two-layer access: technicians can't reach this page at all (the guard
+  // redirects them home); admins can view the roster but can't mutate it
+  // (the Add / Edit / Remove controls are hidden below). The /api/lab-staff
+  // endpoints are owner-only on the server, so even a forged request can't
+  // change roles — this is the matching client-side enforcement.
+  const guard = useRoleGuard(["OWNER", "ADMIN"]);
+  const currentRole = useAuthStore((s) => s.currentUser.role);
+  const canManage = currentRole === "OWNER";
+
   const [staff, setStaff] = useState<Staff[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -66,6 +78,24 @@ export default function TeamPage() {
 
   const visibleStaff = staff.filter((s) => s.status !== "removed");
 
+  if (guard === "loading") {
+    return (
+      <div className="py-12 text-center text-neutral-500">
+        <Loader2 className="mx-auto h-6 w-6 animate-spin" />
+      </div>
+    );
+  }
+  if (guard === "denied") {
+    // The guard's effect has already redirected to /. Render a brief
+    // explanation so the redirect isn't a silent flash.
+    return (
+      <div className="mx-auto max-w-md py-12 text-center text-sm text-neutral-500">
+        You don&rsquo;t have access to the Team page. Ask the lab owner if you
+        need to manage staff.
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto max-w-4xl">
       <div className="mb-4">
@@ -86,14 +116,26 @@ export default function TeamPage() {
             Every staff member who logs into this lab has their own email + PIN.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setAddOpen(true)}
-          className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-brand-500 px-4 text-sm font-medium text-white transition-colors hover:bg-brand-600"
-        >
-          <Plus className="h-4 w-4" /> Add staff
-        </button>
+        {canManage && (
+          <button
+            type="button"
+            onClick={() => setAddOpen(true)}
+            className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-brand-500 px-4 text-sm font-medium text-white transition-colors hover:bg-brand-600"
+          >
+            <Plus className="h-4 w-4" /> Add staff
+          </button>
+        )}
       </div>
+
+      {!canManage && (
+        <Card className="mb-4 flex items-start gap-2 border-neutral-200 bg-neutral-50 p-3 text-sm text-neutral-700">
+          <Info className="mt-0.5 h-4 w-4 shrink-0 text-neutral-500" />
+          <span>
+            View-only access. Only the lab owner can add, edit, or remove
+            staff or change roles.
+          </span>
+        </Card>
+      )}
 
       {error && (
         <Card className="mb-4 border-red-200 bg-red-50 p-4 text-sm text-red-700">
@@ -111,13 +153,15 @@ export default function TeamPage() {
           <p className="mb-3 text-neutral-500">
             No staff yet besides you.
           </p>
-          <button
-            type="button"
-            onClick={() => setAddOpen(true)}
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-brand-500 px-4 text-sm font-medium text-white transition-colors hover:bg-brand-600"
-          >
-            <Plus className="h-4 w-4" /> Add your first staff member
-          </button>
+          {canManage && (
+            <button
+              type="button"
+              onClick={() => setAddOpen(true)}
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-brand-500 px-4 text-sm font-medium text-white transition-colors hover:bg-brand-600"
+            >
+              <Plus className="h-4 w-4" /> Add your first staff member
+            </button>
+          )}
         </Card>
       ) : (
         <Card className="divide-y divide-neutral-100 overflow-hidden p-0">
@@ -125,6 +169,7 @@ export default function TeamPage() {
             <StaffRow
               key={s.staff_id}
               staff={s}
+              canManage={canManage}
               onEdit={() => setEditing(s)}
               onChanged={reload}
             />
@@ -132,7 +177,9 @@ export default function TeamPage() {
         </Card>
       )}
 
-      {addOpen && (
+      {/* Dialogs are owner-only — both `canManage` gates AND the server
+          PATCH/POST/DELETE refuse non-owners as a defense-in-depth match. */}
+      {canManage && addOpen && (
         <AddStaffDialog
           onClose={() => setAddOpen(false)}
           onCreated={() => {
@@ -141,7 +188,7 @@ export default function TeamPage() {
           }}
         />
       )}
-      {editing && (
+      {canManage && editing && (
         <EditStaffDialog
           staff={editing}
           onClose={() => setEditing(null)}
@@ -159,10 +206,13 @@ export default function TeamPage() {
 
 function StaffRow({
   staff,
+  canManage,
   onEdit,
   onChanged,
 }: {
   staff: Staff;
+  /** False for admin viewers — hides the Edit + Remove buttons. */
+  canManage: boolean;
   onEdit: () => void;
   onChanged: () => void;
 }) {
@@ -224,31 +274,33 @@ function StaffRow({
             : "Never logged in"}
         </div>
       </div>
-      <div className="flex shrink-0 items-center gap-2">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onEdit}
-          aria-label={`Edit ${staff.display_name}`}
-        >
-          <UserCog className="h-4 w-4" />
-          <span className="hidden sm:inline">Edit</span>
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={removeStaff}
-          disabled={busy}
-          className="text-red-600 hover:bg-red-50 hover:text-red-700"
-          aria-label={`Remove ${staff.display_name}`}
-        >
-          {busy ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <Trash2 className="h-4 w-4" />
-          )}
-        </Button>
-      </div>
+      {canManage && (
+        <div className="flex shrink-0 items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onEdit}
+            aria-label={`Edit ${staff.display_name}`}
+          >
+            <UserCog className="h-4 w-4" />
+            <span className="hidden sm:inline">Edit</span>
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={removeStaff}
+            disabled={busy}
+            className="text-red-600 hover:bg-red-50 hover:text-red-700"
+            aria-label={`Remove ${staff.display_name}`}
+          >
+            {busy ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Trash2 className="h-4 w-4" />
+            )}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
