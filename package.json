@@ -19,7 +19,8 @@
     "emu:seed": "FIRESTORE_EMULATOR_HOST=localhost:8080 FIREBASE_AUTH_EMULATOR_HOST=localhost:9099 GCLOUD_PROJECT=demo-rakshsetu tsx scripts/seed-emulator.ts",
     "emu:wipe": "FIRESTORE_EMULATOR_HOST=localhost:8080 FIREBASE_AUTH_EMULATOR_HOST=localhost:9099 GCLOUD_PROJECT=demo-rakshsetu tsx scripts/wipe-data.ts",
     "ops:provision-lab": "tsx scripts/provision-lab.ts",
-    "ops:rotate-pin": "tsx scripts/rotate-pin.ts"
+    "ops:rotate-pin": "tsx scripts/rotate-pin.ts",
+    "ops:create-admin": "tsx scripts/create-admin.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.4.1",

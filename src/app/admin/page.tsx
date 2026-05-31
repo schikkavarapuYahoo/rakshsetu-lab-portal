@@ -61,22 +61,33 @@ async function loadStats(
   let reportsWindow = 0;
 
   // Firestore "in" supports up to 30 elements per query — chunk lab IDs.
+  // The (lab_id, created_at) composite query needs a Firestore composite
+  // index. On a fresh project the index doesn't exist yet — Firestore
+  // throws with a clickable URL in the error message that auto-creates
+  // it. We catch + zero-fill so the admin overview renders instead of
+  // 500'ing on day-one; once the index lands (or the admin clicks the
+  // URL once), the numbers populate naturally on the next request.
   if (labIds.length > 0) {
-    for (let i = 0; i < labIds.length; i += 30) {
-      const chunk = labIds.slice(i, i + 30);
-      const snap = await db.collection('lab_reports')
-        .where('lab_id', 'in', chunk)
-        .where('created_at', '>=', windowStart)
-        .get();
-      reportsWindow += snap.size;
-      for (const r of snap.docs) {
-        const data = r.data();
-        const meta = labMeta.get(data.lab_id as string);
-        if (meta) {
-          revenueWindowPaise += Math.floor(meta.pricePaise * meta.sharePct / 100);
-          reportsByLab.set(data.lab_id as string, (reportsByLab.get(data.lab_id as string) ?? 0) + 1);
+    try {
+      for (let i = 0; i < labIds.length; i += 30) {
+        const chunk = labIds.slice(i, i + 30);
+        const snap = await db.collection('lab_reports')
+          .where('lab_id', 'in', chunk)
+          .where('created_at', '>=', windowStart)
+          .get();
+        reportsWindow += snap.size;
+        for (const r of snap.docs) {
+          const data = r.data();
+          const meta = labMeta.get(data.lab_id as string);
+          if (meta) {
+            revenueWindowPaise += Math.floor(meta.pricePaise * meta.sharePct / 100);
+            reportsByLab.set(data.lab_id as string, (reportsByLab.get(data.lab_id as string) ?? 0) + 1);
+          }
         }
       }
+    } catch (err) {
+      console.warn('[admin/loadStats] lab_reports query skipped:', err);
+      // Counts stay at 0 — page renders cleanly without throwing.
     }
   }
 
