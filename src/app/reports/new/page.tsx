@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Form, FormField } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { OutlinedInput } from "@/components/ui/outlined-input";
 import { OutlinedSelect } from "@/components/ui/outlined-select";
 import { OutlinedTextarea } from "@/components/ui/outlined-textarea";
@@ -126,6 +127,10 @@ interface TestDraft {
   results: ResultRowDraft[];
   /** Receptionists usually skip results at creation, so default to collapsed. */
   resultsExpanded: boolean;
+  /** Per-test price override in rupees. undefined = use catalog basePrice.
+   *  Lets the receptionist adjust a single test's price for this visit
+   *  (insurance rate, regular customer discount, partial repeat, etc.). */
+  priceOverride?: number;
 }
 
 const emptyRow = (): ResultRowDraft => ({
@@ -328,6 +333,13 @@ function NewReportContent() {
   const isDirty = form.formState.isDirty || tests.length > 0;
   useUnsavedChangesWarning(isDirty);
 
+  // Visit-level discount in rupees (applied to subtotal). Lets the
+  // receptionist take a flat amount off — e.g. corporate referral
+  // discount, neighbour-discount, regular-customer goodwill — without
+  // editing every test's price individually.
+  const [discount, setDiscount] = useState<number>(0);
+  const [discountReason, setDiscountReason] = useState<string>("");
+
   // Explicit price-agreement gate. The Check-in section + Create button
   // stay locked until the receptionist ticks "Patient agreed to the
   // price" — mirrors the real small-lab cash workflow where the
@@ -338,20 +350,36 @@ function NewReportContent() {
     if (tests.length === 0 && priceAgreed) setPriceAgreed(false);
   }, [tests.length, priceAgreed]);
 
-  // Running total for the sticky action bar.
+  // Running total for the sticky action bar. Each test's effective
+  // price = override (if set) ?? catalog basePrice. Visit-level discount
+  // is subtracted from the subtotal — clamped at 0 so the total never
+  // goes negative.
   const selectedSummary = useMemo(() => {
-    let total = 0;
+    let subtotal = 0;
     let pricedCount = 0;
     for (const t of tests) {
+      if (typeof t.priceOverride === "number" && t.priceOverride >= 0) {
+        subtotal += t.priceOverride;
+        pricedCount++;
+        continue;
+      }
       if (t.source === "__custom") continue;
       const labTest = labTestsById.get(t.source);
       if (labTest && typeof labTest.basePrice === "number") {
-        total += labTest.basePrice;
+        subtotal += labTest.basePrice;
         pricedCount++;
       }
     }
-    return { count: tests.length, total, pricedCount };
-  }, [tests, labTestsById]);
+    const safeDiscount = Math.max(0, Math.min(discount, subtotal));
+    const total = subtotal - safeDiscount;
+    return {
+      count: tests.length,
+      subtotal,
+      discount: safeDiscount,
+      total,
+      pricedCount,
+    };
+  }, [tests, labTestsById, discount]);
 
   // Catalog selection — clicking a tile toggles a test into/out of the visit.
   // `source` holds the LabTest.id for catalog picks (or "__custom" for free-form rows).
@@ -874,6 +902,71 @@ function NewReportContent() {
                       </div>
                     </div>
                   </div>
+
+                  {/* Discount controls — entered before patient agrees. */}
+                  <div className="grid grid-cols-1 gap-3 rounded-md bg-white p-3 ring-1 ring-neutral-200 sm:grid-cols-[160px_1fr]">
+                    <div className="space-y-1">
+                      <Label htmlFor="visit-discount" className="text-xs">
+                        Discount (₹)
+                      </Label>
+                      <Input
+                        id="visit-discount"
+                        type="number"
+                        min={0}
+                        max={selectedSummary.subtotal || undefined}
+                        step={1}
+                        value={discount === 0 ? "" : discount}
+                        onChange={(e) => {
+                          const n = Number(e.target.value);
+                          setDiscount(Number.isFinite(n) && n > 0 ? n : 0);
+                        }}
+                        placeholder="0"
+                        className="h-9 text-right tabular-nums"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="visit-discount-reason" className="text-xs">
+                        Reason (optional)
+                      </Label>
+                      <Input
+                        id="visit-discount-reason"
+                        type="text"
+                        value={discountReason}
+                        onChange={(e) => setDiscountReason(e.target.value)}
+                        placeholder="e.g. corporate referral, returning customer"
+                        className="h-9"
+                        maxLength={200}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Subtotal → discount → total breakdown */}
+                  {(selectedSummary.discount > 0 ||
+                    selectedSummary.subtotal !== selectedSummary.total) && (
+                    <div className="space-y-1 rounded-md bg-white px-3 py-2 text-xs ring-1 ring-neutral-200">
+                      <div className="flex justify-between text-neutral-600">
+                        <span>Subtotal</span>
+                        <span className="tabular-nums">
+                          ₹{selectedSummary.subtotal.toLocaleString("en-IN")}
+                        </span>
+                      </div>
+                      {selectedSummary.discount > 0 && (
+                        <div className="flex justify-between text-emerald-700">
+                          <span>− Discount</span>
+                          <span className="tabular-nums">
+                            ₹{selectedSummary.discount.toLocaleString("en-IN")}
+                          </span>
+                        </div>
+                      )}
+                      <div className="mt-1 flex justify-between border-t border-neutral-100 pt-1 font-semibold text-neutral-900">
+                        <span>Total</span>
+                        <span className="tabular-nums">
+                          ₹{selectedSummary.total.toLocaleString("en-IN")}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
                   <label className="flex cursor-pointer items-center gap-2.5 rounded-md bg-white px-3 py-2.5 text-sm shadow-sm ring-1 ring-neutral-200 transition-colors hover:bg-neutral-50">
                     <Checkbox
                       checked={priceAgreed}
@@ -1346,9 +1439,39 @@ function SelectedTestCard({
             {typeof labTest.basePrice === "number" && (
               <span className="inline-flex items-center gap-1.5 text-neutral-600 tabular-nums">
                 <span className="text-neutral-400">Price:</span>
-                <span className="font-medium text-neutral-800">
-                  ₹{labTest.basePrice.toLocaleString("en-IN")}
+                <span className="inline-flex items-baseline gap-0.5">
+                  <span className="font-medium text-neutral-800">₹</span>
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={test.priceOverride ?? labTest.basePrice}
+                    onChange={(e) => {
+                      const n = Number(e.target.value);
+                      onChange({
+                        priceOverride: Number.isFinite(n) && n >= 0 ? n : 0,
+                      });
+                    }}
+                    className={cn(
+                      "w-20 rounded border border-neutral-200 bg-white px-1.5 py-0.5 text-right text-xs tabular-nums focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500/20",
+                      typeof test.priceOverride === "number" &&
+                        test.priceOverride !== labTest.basePrice &&
+                        "border-amber-300 bg-amber-50 font-semibold",
+                    )}
+                    aria-label="Override price for this test"
+                  />
                 </span>
+                {typeof test.priceOverride === "number" &&
+                  test.priceOverride !== labTest.basePrice && (
+                    <button
+                      type="button"
+                      onClick={() => onChange({ priceOverride: undefined })}
+                      className="text-[10px] text-amber-700 hover:underline"
+                      aria-label="Reset to catalog price"
+                    >
+                      reset to ₹{labTest.basePrice.toLocaleString("en-IN")}
+                    </button>
+                  )}
               </span>
             )}
           </div>
