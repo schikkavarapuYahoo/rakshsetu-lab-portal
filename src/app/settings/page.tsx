@@ -1,6 +1,6 @@
 "use client";
 
-import { Building2, ChevronRight, FlaskConical, Wallet } from "lucide-react";
+import { Building2, ChevronRight, FlaskConical, Users, Wallet } from "lucide-react";
 import Link from "next/link";
 
 import { useAuthStore } from "@/lib/stores/auth";
@@ -30,6 +30,14 @@ const sections: SettingsSection[] = [
     description:
       "The tests your lab offers — pricing, reference ranges, and custom panels.",
     icon: FlaskConical,
+  },
+  {
+    href: "/settings/team",
+    title: "Team",
+    description:
+      "Add, edit, and manage the staff who can log into this lab.",
+    icon: Users,
+    allowedRoles: ["OWNER", "ADMIN"],
   },
   {
     href: "/settings/billing",
