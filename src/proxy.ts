@@ -38,7 +38,7 @@ async function isValidSession(token: string): Promise<boolean> {
   }
 }
 
-function buildCSP(nonce: string): string {
+function buildCSP(): string {
   // We use 'unsafe-inline' 'unsafe-eval' in BOTH dev and prod because
   // the Next.js App Router emits script tags without our middleware's
   // generated nonce — `strict-dynamic` + nonce blocks every chunk and
@@ -47,7 +47,6 @@ function buildCSP(nonce: string): string {
   // is enforced server-side anyway (every API route uses
   // requireLabSession()), so relaxing client-side script restrictions
   // doesn't widen our blast radius meaningfully.
-  void nonce;
   const scriptSrc =
     "'self' 'unsafe-inline' 'unsafe-eval' https://*.googleapis.com https://*.gstatic.com";
   return [
@@ -75,7 +74,7 @@ function applyCSP(
   res: NextResponse,
   nonce: string,
 ): NextResponse {
-  const csp = buildCSP(nonce);
+  const csp = buildCSP();
   res.headers.set("Content-Security-Policy", csp);
   res.headers.set("x-nonce", nonce);
   req.headers.set("x-nonce", nonce);
