@@ -204,6 +204,35 @@ interface LabCatalogState {
   getById: (id: string) => LabTest | undefined;
   getByCode: (code: string) => LabTest | undefined;
   reset: () => void;
+  /**
+   * Replace the local catalog with the lab's persisted Firestore
+   * snapshot. Runs at app boot via `StoreHydrationDriver`. Falls back
+   * to the existing local state if the lab has never persisted (first
+   * launch) or the server returns an error.
+   */
+  hydrateFromAPI: () => Promise<void>;
+}
+
+/**
+ * Fire-and-forget persistence of the whole `tests` array. Whole-array
+ * semantics keeps the wiring simple — every mutating action just calls
+ * this with the post-mutation state and we PUT the snapshot. Last
+ * write wins on concurrent edits, which is fine at pilot scale.
+ */
+function persistCatalogRemote(tests: LabTest[]): void {
+  void fetch("/api/lab-catalog", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ tests }),
+  })
+    .then((res) => {
+      if (!res.ok) {
+        console.warn(`[lab-catalog] PUT failed: ${res.status}`);
+      }
+    })
+    .catch((err) => {
+      console.warn("[lab-catalog] PUT threw:", err);
+    });
 }
 
 export const useLabCatalogStore = create<LabCatalogState>()(
@@ -247,7 +276,11 @@ export const useLabCatalogStore = create<LabCatalogState>()(
           updatedAt: stamp.at,
           updatedBy: stamp,
         };
-        set((state) => ({ tests: [...state.tests, test] }));
+        set((state) => {
+          const next = [...state.tests, test];
+          persistCatalogRemote(next);
+          return { tests: next };
+        });
         return test;
       },
 
@@ -284,7 +317,11 @@ export const useLabCatalogStore = create<LabCatalogState>()(
           updatedAt: stamp.at,
           updatedBy: stamp,
         };
-        set((state) => ({ tests: [...state.tests, test] }));
+        set((state) => {
+          const next = [...state.tests, test];
+          persistCatalogRemote(next);
+          return { tests: next };
+        });
         return test;
       },
 
@@ -303,9 +340,11 @@ export const useLabCatalogStore = create<LabCatalogState>()(
           updatedAt: stamp.at,
           updatedBy: stamp,
         };
-        set((state) => ({
-          tests: state.tests.map((t) => (t.id === id ? updated : t)),
-        }));
+        set((state) => {
+          const next = state.tests.map((t) => (t.id === id ? updated : t));
+          persistCatalogRemote(next);
+          return { tests: next };
+        });
         return updated;
       },
 
@@ -320,14 +359,20 @@ export const useLabCatalogStore = create<LabCatalogState>()(
           updatedAt: stamp.at,
           updatedBy: stamp,
         };
-        set((state) => ({
-          tests: state.tests.map((t) => (t.id === id ? updated : t)),
-        }));
+        set((state) => {
+          const next = state.tests.map((t) => (t.id === id ? updated : t));
+          persistCatalogRemote(next);
+          return { tests: next };
+        });
         return updated;
       },
 
       deleteTest: (id) =>
-        set((state) => ({ tests: state.tests.filter((t) => t.id !== id) })),
+        set((state) => {
+          const next = state.tests.filter((t) => t.id !== id);
+          persistCatalogRemote(next);
+          return { tests: next };
+        }),
 
       getById: (id) => get().tests.find((t) => t.id === id),
 
@@ -336,7 +381,23 @@ export const useLabCatalogStore = create<LabCatalogState>()(
           (t) => t.code.toUpperCase() === code.toUpperCase(),
         ),
 
-      reset: () => set({ tests: seedLabTests }),
+      reset: () => {
+        set({ tests: seedLabTests });
+        persistCatalogRemote(seedLabTests);
+      },
+
+      hydrateFromAPI: async () => {
+        const res = await fetch("/api/lab-catalog", { cache: "no-store" });
+        if (res.status === 401) return;
+        if (!res.ok) throw new Error(`GET /api/lab-catalog ${res.status}`);
+        const body = (await res.json()) as { tests?: LabTest[] };
+        const tests = body.tests ?? [];
+        // First-launch: server has no snapshot yet → keep the locally
+        // seeded catalog so the lab sees the 47 master tests. The next
+        // mutation will write the snapshot for the first time.
+        if (tests.length === 0) return;
+        set({ tests });
+      },
     }),
     {
       name: "rakshsetu-lab-catalog",

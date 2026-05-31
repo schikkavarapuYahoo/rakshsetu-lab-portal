@@ -3,6 +3,8 @@
 import { useEffect } from "react";
 
 import { useAuthStore } from "@/lib/stores/auth";
+import { useBillingStore } from "@/lib/stores/billing";
+import { useLabCatalogStore } from "@/lib/stores/lab-catalog";
 import { useLabProfileStore } from "@/lib/stores/lab-profile";
 import { usePatientsStore } from "@/lib/stores/patients";
 import { useReportsStore } from "@/lib/stores/reports";
@@ -51,6 +53,20 @@ export function StoreHydrationDriver() {
       .hydrateFromAPI()
       .catch((err) => {
         console.warn("[hydration] lab profile fell back to cache:", err);
+      });
+
+    void useLabCatalogStore
+      .getState()
+      .hydrateFromAPI()
+      .catch((err) => {
+        console.warn("[hydration] lab catalog fell back to cache:", err);
+      });
+
+    void useBillingStore
+      .getState()
+      .hydrateFromAPI()
+      .catch((err) => {
+        console.warn("[hydration] billing fell back to cache:", err);
       });
   }, []);
 

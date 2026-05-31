@@ -89,6 +89,61 @@ interface BillingState {
   setSuspended: (suspended: boolean) => void;
   /** Wipe everything back to seed (Settings → reset button). */
   reset: () => void;
+  /**
+   * Replace local state with `labs/{labId}` balance + settings + last
+   * 200 ledger entries from Firestore. Runs at app boot via
+   * `StoreHydrationDriver`. Skips replacement when the server reports
+   * zero ledger entries AND zero balance (first-launch — local seed
+   * trial grant stays visible until the first real entry).
+   */
+  hydrateFromAPI: () => Promise<void>;
+}
+
+// ── REMOTE PERSISTENCE ────────────────────────────────────────────────
+// credit / debit / updateSettings / setSuspended all flush to Firestore
+// in the background. The server-side ledger entry is the source of
+// truth; local mutation runs first so the UI updates immediately, and
+// the next hydration reconciles if anything diverged.
+
+function persistEntryRemote(input: {
+  direction: LedgerDirection;
+  amountPaise: Paise;
+  reason: LedgerReason;
+  metadata?: Record<string, string | number | undefined>;
+  by: AuditStamp;
+}): void {
+  // Filter out undefined keys from metadata — Zod's record schema
+  // accepts only string|number values, so undefined would fail
+  // validation server-side.
+  const cleanMeta: Record<string, string | number> = {};
+  for (const [k, v] of Object.entries(input.metadata ?? {})) {
+    if (v !== undefined) cleanMeta[k] = v;
+  }
+  void fetch("/api/billing/entry", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ...input, metadata: cleanMeta }),
+  })
+    .then((res) => {
+      if (!res.ok) console.warn(`[billing] entry POST failed: ${res.status}`);
+    })
+    .catch((err) => console.warn("[billing] entry POST threw:", err));
+}
+
+function persistSettingsRemote(patch: {
+  pricePerReportPaise?: Paise;
+  lowBalanceThresholdPaise?: Paise;
+  manuallySuspended?: boolean;
+}): void {
+  void fetch("/api/billing/state", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(patch),
+  })
+    .then((res) => {
+      if (!res.ok) console.warn(`[billing] state POST failed: ${res.status}`);
+    })
+    .catch((err) => console.warn("[billing] state POST threw:", err));
 }
 
 function currentStamp(): AuditStamp {
@@ -190,6 +245,7 @@ export const useBillingStore = create<BillingState>()(
           balancePaise: newBalance,
           ledger: [entry, ...s.ledger],
         }));
+        persistEntryRemote({ direction: "credit", amountPaise, reason, metadata, by: stamp });
         return entry;
       },
 
@@ -219,6 +275,7 @@ export const useBillingStore = create<BillingState>()(
           balancePaise: newBalance,
           ledger: [entry, ...s.ledger],
         }));
+        persistEntryRemote({ direction: "debit", amountPaise, reason, metadata, by: stamp });
         return entry;
       },
 
@@ -228,9 +285,13 @@ export const useBillingStore = create<BillingState>()(
           lowBalanceThresholdPaise:
             lowBalanceThresholdPaise ?? s.lowBalanceThresholdPaise,
         }));
+        persistSettingsRemote({ pricePerReportPaise, lowBalanceThresholdPaise });
       },
 
-      setSuspended: (suspended) => set({ manuallySuspended: suspended }),
+      setSuspended: (suspended) => {
+        set({ manuallySuspended: suspended });
+        persistSettingsRemote({ manuallySuspended: suspended });
+      },
 
       reset: () => {
         const ledger = seedLedger();
@@ -239,6 +300,40 @@ export const useBillingStore = create<BillingState>()(
           balancePaise: SEED_TRIAL_PAISE,
           ledger,
         });
+      },
+
+      hydrateFromAPI: async () => {
+        const res = await fetch("/api/billing/state", { cache: "no-store" });
+        if (res.status === 401) return;
+        if (!res.ok) throw new Error(`GET /api/billing/state ${res.status}`);
+        const body = (await res.json()) as {
+          balancePaise?: number;
+          pricePerReportPaise?: number | null;
+          lowBalanceThresholdPaise?: number | null;
+          manuallySuspended?: boolean;
+          ledger?: LedgerEntry[];
+        };
+        // First-launch guard: server has nothing yet → keep the seed
+        // trial grant so the lab sees ₹1,000 of starter credits on
+        // the billing page. Future entries will write the ledger and
+        // future hydrations will start replacing.
+        if (
+          (body.ledger?.length ?? 0) === 0 &&
+          (body.balancePaise ?? 0) === 0
+        ) {
+          return;
+        }
+        set((s) => ({
+          balancePaise: (body.balancePaise as Paise) ?? s.balancePaise,
+          pricePerReportPaise:
+            (body.pricePerReportPaise as Paise | undefined) ??
+            s.pricePerReportPaise,
+          lowBalanceThresholdPaise:
+            (body.lowBalanceThresholdPaise as Paise | undefined) ??
+            s.lowBalanceThresholdPaise,
+          manuallySuspended: body.manuallySuspended ?? s.manuallySuspended,
+          ledger: body.ledger ?? s.ledger,
+        }));
       },
     }),
     {
