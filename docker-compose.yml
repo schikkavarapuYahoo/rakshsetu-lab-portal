@@ -1,0 +1,47 @@
+# Local development services.
+#
+# Run with:
+#   docker compose up              # builds + starts in foreground
+#   docker compose up -d           # detached
+#   docker compose down            # stops, data preserved
+#   docker compose logs -f         # tail emulator logs
+#
+# What this gives you: a real Firestore / Auth / Storage emulator on
+# localhost, no Google account needed. The Next.js dev server still
+# runs natively on the host (`npm run dev`) — it talks to the emulator
+# via FIRESTORE_EMULATOR_HOST / FIREBASE_AUTH_EMULATOR_HOST env vars.
+
+services:
+  emulator:
+    container_name: rakshsetu-firebase-emulator
+    build:
+      context: ./docker/emulator
+      dockerfile: Dockerfile
+    ports:
+      # Emulator UI — http://localhost:4000
+      - "4000:4000"
+      # Firestore — gRPC + HTTP on the same port
+      - "8080:8080"
+      # Auth (email/password, anonymous, etc.)
+      - "9099:9099"
+      # Storage (lab logo uploads, future patient document scans)
+      - "9199:9199"
+      # Functions — placeholder for the PDF-generation Cloud Function
+      - "5001:5001"
+      # Internal hub the emulators use to coordinate
+      - "4400:4400"
+      - "9150:9150"
+    volumes:
+      # Firebase project config + emulator port assignments.
+      - ./firebase.json:/workspace/firebase.json:ro
+      - ./.firebaserc:/workspace/.firebaserc:ro
+      # Security rules — open inside the emulator, locked down before prod.
+      - ./firestore.rules:/workspace/firestore.rules:ro
+      - ./storage.rules:/workspace/storage.rules:ro
+      # Firestore data is exported to this directory on `down` and
+      # imported on `up`, so a restart doesn't wipe everything. Anything
+      # important lives here — gitignored.
+      - ./.emu-data:/workspace/.emu-data
+    restart: unless-stopped
+    # The emulator stays healthy as long as the Firestore HTTP port
+    # answers. Drop healthchecks for now — first-start latency varies.

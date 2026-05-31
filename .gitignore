@@ -30,8 +30,10 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# env files — secrets stay local. The `.example` template IS committed
+# so the team has a working copy-and-fill-in starting point.
 .env*
+!.env*.example
 
 # vercel
 .vercel
@@ -39,3 +41,15 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Firebase Emulator persistence — local dev data, not source.
+.emu-data/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+storage-debug.log
+auth-debug.log
+
+# Service-account JSONs (for when real Firebase ships) — never commit.
+*service-account*.json
+*firebase-adminsdk*.json

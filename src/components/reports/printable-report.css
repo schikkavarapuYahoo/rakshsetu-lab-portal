@@ -1,0 +1,792 @@
+/* ────────────────────────────────────────────────────────────────────
+   PrintableReport styles
+   Designed to read like a NABL-style Indian lab report:
+   austere palette, strong typographic hierarchy, A4 page layout,
+   and a single brand accent so the document feels clinical, not
+   marketing-y. The @media print block ensures only the report
+   reaches paper.
+   ──────────────────────────────────────────────────────────────────── */
+
+:root {
+  --report-ink: #111827;
+  --report-ink-soft: #4b5563;
+  --report-ink-muted: #6b7280;
+  --report-ink-faint: #9ca3af;
+  --report-rule: #e5e7eb;
+  --report-rule-soft: #f1f5f9;
+  --report-bg-soft: #f8fafc;
+  --report-accent: #b8462f;
+  --report-accent-soft: #fbe9e3;
+  --report-flag-low: #1d4ed8;
+  --report-flag-high: #b91c1c;
+  --report-flag-critical: #7f1d1d;
+  --report-flag-normal: #047857;
+}
+
+/* ─────────────────── PAGE ─────────────────── */
+.print-page {
+  background: white;
+  color: var(--report-ink);
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  font-size: 10.5pt;
+  line-height: 1.45;
+  padding: 36px 44px 28px;
+  max-width: 820px;
+  margin: 0 auto;
+  position: relative;
+}
+
+/* Status watermark for non-Published reports. Diagonal, low-opacity,
+   covers the page so a screenshot of a "Draft" or "Review Copy" can
+   never be mistaken for a delivered report. */
+.print-page::before {
+  content: attr(data-watermark);
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 90pt;
+  font-weight: 800;
+  color: rgba(185, 28, 28, 0.07);
+  letter-spacing: 8px;
+  transform: rotate(-22deg);
+  pointer-events: none;
+  z-index: 0;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.print-page[data-watermark=""]::before,
+.print-page:not([data-watermark])::before {
+  display: none;
+}
+
+.print-page > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* ─────────────────── HEADER ─────────────────── */
+.report-header {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 22px;
+  padding-bottom: 14px;
+}
+
+.header-left {
+  flex-shrink: 0;
+}
+
+.lab-logo {
+  width: 78px;
+  height: 78px;
+  object-fit: contain;
+}
+
+.lab-logo-placeholder {
+  width: 78px;
+  height: 78px;
+  background: var(--report-accent);
+  color: white;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 36pt;
+  font-weight: 700;
+  font-family: "Inter", sans-serif;
+  letter-spacing: -1px;
+}
+
+.header-right {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.lab-name {
+  font-size: 22pt;
+  font-weight: 700;
+  margin: 0 0 2px;
+  color: var(--report-ink);
+  letter-spacing: -0.6px;
+  line-height: 1.05;
+  font-family: "Source Serif Pro", "Charter", "Georgia", "Times New Roman",
+    serif;
+}
+
+.lab-address,
+.lab-contact {
+  font-size: 9.5pt;
+  color: var(--report-ink-soft);
+  line-height: 1.4;
+}
+
+.lab-contact {
+  margin-top: 2px;
+}
+
+.lab-contact .sep {
+  color: var(--report-ink-faint);
+  margin: 0 6px;
+}
+
+/* Accreditation strip — small, dense, mono-aligned. Sits between the
+   lab contact line and the brand-coloured divider. */
+.lab-accreditation {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 8.5pt;
+  color: var(--report-ink-muted);
+  line-height: 1.35;
+}
+
+.lab-accreditation .item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.lab-accreditation .item-label {
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  color: var(--report-ink-soft);
+}
+
+.lab-accreditation .item-value {
+  font-family: "JetBrains Mono", "SF Mono", Consolas, monospace;
+  font-size: 8pt;
+  color: var(--report-ink-soft);
+}
+
+.header-divider {
+  border-top: 2px solid var(--report-accent);
+  margin: 8px 0 18px;
+}
+
+/* ─────────────────── CRITICAL ALERT BANNER ─────────────────── */
+/* Renders above the patient block when any result is Critical.
+   Designed to be impossible to miss — bold red, full-width, clear
+   call-to-action. NABL requires highlighted critical values. */
+.critical-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 10px 14px;
+  background: #fef2f2;
+  border: 1.5px solid #fca5a5;
+  border-left-width: 5px;
+  border-radius: 4px;
+  color: #7f1d1d;
+  font-size: 10pt;
+  line-height: 1.4;
+}
+
+.critical-banner .icon {
+  flex-shrink: 0;
+  font-size: 14pt;
+  font-weight: 900;
+  line-height: 1;
+  color: #b91c1c;
+}
+
+.critical-banner .title {
+  font-weight: 700;
+  font-size: 10.5pt;
+  letter-spacing: 0.3px;
+  color: #7f1d1d;
+  text-transform: uppercase;
+}
+
+.critical-banner .body {
+  margin-top: 2px;
+  color: #991b1b;
+  font-weight: 500;
+}
+
+/* ─────────────────── PATIENT BLOCK ─────────────────── */
+.patient-block {
+  border: 1px solid var(--report-rule);
+  border-radius: 4px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+
+.patient-block .block-title {
+  font-size: 8pt;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--report-ink-muted);
+  font-weight: 700;
+  margin: 0 0 8px;
+}
+
+.patient-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  column-gap: 16px;
+  row-gap: 8px;
+}
+
+.patient-grid .field {
+  min-width: 0;
+}
+
+.patient-grid .field.full-row {
+  grid-column: 1 / -1;
+}
+
+.patient-grid .field.half-row {
+  grid-column: span 2;
+}
+
+.patient-grid .label {
+  display: block;
+  font-size: 8pt;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--report-ink-muted);
+  font-weight: 500;
+  line-height: 1.3;
+  margin-bottom: 1px;
+}
+
+.patient-grid .value {
+  display: block;
+  font-size: 10pt;
+  font-weight: 600;
+  color: var(--report-ink);
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.patient-grid .value .value-hint {
+  font-size: 8.5pt;
+  font-weight: 500;
+  color: var(--report-ink-muted);
+  margin-left: 4px;
+}
+
+/* Subhead inside the patient block — visually separates identity from
+   vitals captured at this visit. */
+.patient-subhead {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 0 -2px;
+  font-size: 8pt;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--report-ink-muted);
+}
+
+.patient-subhead::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--report-rule);
+}
+
+.report-id {
+  font-family: "JetBrains Mono", "SF Mono", Consolas, monospace;
+  font-size: 9pt;
+  letter-spacing: 0.2px;
+}
+
+/* ─────────────────── COLLECTION BLOCK ─────────────────── */
+/* Sample identity (row 1) + collection / received / reported
+   timestamps (row 2) — same visual band so both halves of the
+   "where did this come from and when" story sit together. */
+.collection-block {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0;
+  margin-bottom: 14px;
+  border: 1px solid var(--report-rule);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.collection-block .cell {
+  padding: 8px 12px;
+  border-right: 1px solid var(--report-rule);
+  border-bottom: 1px solid var(--report-rule);
+}
+
+.collection-block .cell:nth-child(3n) {
+  border-right: 0;
+}
+
+.collection-block .cell:nth-last-child(-n + 3) {
+  border-bottom: 0;
+}
+
+.collection-block .cell-label {
+  font-size: 8pt;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--report-ink-muted);
+  font-weight: 600;
+}
+
+.collection-block .cell-value {
+  font-size: 9.5pt;
+  font-weight: 600;
+  color: var(--report-ink);
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+.collection-block .sample-id {
+  font-family: "JetBrains Mono", "SF Mono", Consolas, monospace;
+}
+
+.collection-block .cell-hint {
+  font-size: 8.5pt;
+  font-weight: 500;
+  color: var(--report-ink-muted);
+  margin-left: 4px;
+}
+
+/* ─────────────────── TEST TITLE BAR ─────────────────── */
+.test-title-bar {
+  background: var(--report-ink);
+  color: white;
+  padding: 7px 14px;
+  margin: 16px 0 0;
+}
+
+.test-title {
+  font-size: 11pt;
+  font-weight: 700;
+  margin: 0;
+  letter-spacing: 0.4px;
+}
+
+.test-title-sub {
+  font-size: 8.5pt;
+  font-weight: 500;
+  margin-left: 8px;
+  opacity: 0.75;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* ─────────────────── RESULTS TABLE ─────────────────── */
+.results-section {
+  margin-bottom: 16px;
+}
+
+.results-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10pt;
+  border: 1px solid var(--report-rule);
+  border-top: 0;
+}
+
+.results-table thead {
+  /* Repeats the header on every printed page for multi-page panels. */
+  display: table-header-group;
+}
+
+.results-table thead tr {
+  background: var(--report-bg-soft);
+  border-bottom: 1px solid var(--report-rule);
+}
+
+.results-table th {
+  padding: 8px 12px;
+  text-align: left;
+  font-weight: 700;
+  font-size: 8pt;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--report-ink-soft);
+  vertical-align: middle;
+}
+
+.results-table th.col-result,
+.results-table th.col-range {
+  text-align: right;
+}
+
+.results-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--report-rule-soft);
+  vertical-align: middle;
+}
+
+.results-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.col-test {
+  width: 32%;
+  font-weight: 500;
+}
+.col-result {
+  width: 16%;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.col-units {
+  width: 12%;
+  color: var(--report-ink-muted);
+}
+.col-range {
+  width: 22%;
+  text-align: right;
+  color: var(--report-ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+.col-flag {
+  width: 18%;
+}
+
+.result-value {
+  font-weight: 700;
+  font-size: 10.5pt;
+}
+
+.row-flagged .result-value {
+  color: var(--report-flag-high);
+}
+
+.row-critical .result-value {
+  color: var(--report-flag-critical);
+}
+
+.row-low .result-value {
+  color: var(--report-flag-low);
+}
+
+/* Status indicators — typography-driven, not pill-driven. */
+.status-cell {
+  font-weight: 700;
+  font-size: 9.5pt;
+  letter-spacing: 0.3px;
+}
+
+.status-symbol {
+  display: inline-block;
+  min-width: 22px;
+  padding: 1px 6px;
+  margin-right: 6px;
+  border-radius: 2px;
+  font-family: "JetBrains Mono", "SF Mono", Consolas, monospace;
+  font-size: 8.5pt;
+  font-weight: 700;
+  text-align: center;
+}
+
+.status-low .status-symbol,
+.status-low.status-cell .status-symbol {
+  background: rgba(29, 78, 216, 0.12);
+  color: var(--report-flag-low);
+}
+
+.status-high .status-symbol,
+.status-high.status-cell .status-symbol {
+  background: rgba(185, 28, 28, 0.1);
+  color: var(--report-flag-high);
+}
+
+.status-critical .status-symbol,
+.status-critical.status-cell .status-symbol {
+  background: rgba(127, 29, 29, 0.14);
+  color: var(--report-flag-critical);
+}
+
+.status-normal .status-symbol {
+  background: rgba(4, 120, 87, 0.08);
+  color: var(--report-flag-normal);
+}
+
+.status-low {
+  color: var(--report-flag-low);
+}
+.status-high {
+  color: var(--report-flag-high);
+}
+.status-critical {
+  color: var(--report-flag-critical);
+}
+.status-normal {
+  color: var(--report-flag-normal);
+}
+
+.status-empty {
+  color: var(--report-ink-faint);
+  font-weight: 500;
+  font-style: italic;
+}
+
+/* ─────────────────── INTERPRETATION ─────────────────── */
+.interpretation {
+  margin: 14px 0;
+  padding: 10px 14px;
+  background: var(--report-bg-soft);
+  border-left: 3px solid var(--report-accent);
+  font-size: 9.5pt;
+  line-height: 1.55;
+  color: var(--report-ink-soft);
+}
+
+.interpretation strong {
+  color: var(--report-ink);
+  font-weight: 700;
+}
+
+.interpretation p {
+  margin: 4px 0 0;
+}
+
+.interp-critical {
+  color: var(--report-flag-critical);
+  font-weight: 600;
+}
+
+.interp-warning {
+  color: var(--report-flag-high);
+}
+
+/* ─────────────────── NOTES ─────────────────── */
+.notes-section {
+  margin-bottom: 14px;
+  padding: 10px 14px;
+  background: #fffaf0;
+  border: 1px solid #fde68a;
+  border-radius: 4px;
+  font-size: 9.5pt;
+}
+
+.notes-section strong {
+  color: var(--report-ink);
+  font-weight: 700;
+}
+
+.notes-section p {
+  margin: 4px 0 0;
+  color: var(--report-ink-soft);
+  white-space: pre-wrap;
+}
+
+/* ─────────────────── END OF REPORT ─────────────────── */
+.end-of-report {
+  margin: 22px 0 18px;
+  text-align: center;
+  font-size: 9pt;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  color: var(--report-ink-muted);
+  text-transform: uppercase;
+  position: relative;
+}
+
+.end-of-report::before,
+.end-of-report::after {
+  content: "";
+  display: inline-block;
+  width: 60px;
+  height: 1px;
+  background: var(--report-ink-faint);
+  vertical-align: middle;
+  margin: 0 12px;
+}
+
+/* ─────────────────── FOOTER / SIGNATURE ─────────────────── */
+.report-footer {
+  margin-top: 18px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: flex-end;
+  gap: 24px;
+}
+
+.signature-block {
+  text-align: center;
+  min-width: 240px;
+  justify-self: end;
+}
+
+.signature-line {
+  border-bottom: 1px solid var(--report-ink);
+  margin-bottom: 4px;
+  height: 30px;
+}
+
+.signature-name {
+  font-size: 9.5pt;
+  font-weight: 700;
+  color: var(--report-ink);
+}
+
+.signature-role {
+  font-size: 8.5pt;
+  color: var(--report-ink-muted);
+  margin-top: 1px;
+}
+
+.footer-meta {
+  font-size: 8pt;
+  color: var(--report-ink-muted);
+  align-self: end;
+}
+
+.footer-meta div + div {
+  margin-top: 2px;
+}
+
+/* ─────────────────── DISCLAIMER ─────────────────── */
+.disclaimer {
+  margin-top: 20px;
+  padding-top: 10px;
+  border-top: 1px solid var(--report-rule);
+  font-size: 8pt;
+  color: var(--report-ink-muted);
+  line-height: 1.5;
+}
+
+.disclaimer .page-number {
+  float: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--report-ink-soft);
+}
+
+/* Real page counter — only meaningful at print time. The fallback
+   "Page 1 of 1" text in the markup is what shows on-screen. */
+@media print {
+  .disclaimer .page-number {
+    /* CSS counters: page / pages are reset per print job by the UA. */
+  }
+  .disclaimer .page-number::before {
+    content: "Page " counter(page) " of " counter(pages);
+    /* Hide the markup fallback by replacing it. The span itself
+       holds the fallback text, but ::before stacks above. */
+  }
+  .disclaimer .page-number {
+    /* Suppress the fallback "Page 1 of 1" text by zeroing it out
+       and letting ::before paint the real value. */
+    font-size: 0;
+  }
+  .disclaimer .page-number::before {
+    font-size: 9pt;
+  }
+}
+
+/* ─────────────────── PRINT MEDIA ─────────────────── */
+@media print {
+  /* Hide everything except the printable region */
+  body * {
+    visibility: hidden;
+  }
+  .print-page,
+  .print-page * {
+    visibility: visible;
+  }
+  .print-page {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    max-width: none;
+    padding: 0;
+  }
+
+  @page {
+    size: A4;
+    margin: 14mm;
+  }
+
+  body {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* Avoid awkward breaks across signature / interpretation / footer */
+  .results-table {
+    page-break-inside: auto;
+  }
+  .results-table tr {
+    page-break-inside: avoid;
+  }
+  .interpretation,
+  .end-of-report,
+  .report-footer,
+  .patient-block,
+  .collection-block,
+  .critical-banner,
+  .notes-section {
+    page-break-inside: avoid;
+  }
+  /* Watermark must still render at print time */
+  .print-page::before {
+    color: rgba(185, 28, 28, 0.07);
+  }
+}
+
+/* ─────────────────── BROWSER VIEW (PREVIEW) ─────────────────── */
+.print-page-frame {
+  background: #f4f4f5;
+  padding: 24px;
+  min-height: 100vh;
+}
+
+.print-page-frame .print-page {
+  background: white;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 8px 24px rgba(0, 0, 0, 0.08);
+  border-radius: 2px;
+}
+
+.print-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: white;
+  border-bottom: 1px solid #e5e7eb;
+  padding: 12px 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.print-toolbar .actions {
+  display: flex;
+  gap: 8px;
+}
+
+.print-banner-warning {
+  margin: 0 auto 16px;
+  max-width: 820px;
+  padding: 10px 14px;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-radius: 4px;
+  font-size: 10pt;
+  color: #7c2d12;
+}
+
+@media print {
+  .print-toolbar {
+    display: none !important;
+  }
+  .print-page-frame {
+    background: white;
+    padding: 0;
+  }
+  .print-banner-warning {
+    display: none !important;
+  }
+}

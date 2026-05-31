@@ -1,0 +1,12 @@
+// EMULATOR-ONLY storage rules. See firestore.rules for the same
+// caveat — these are wide open inside the local container and must be
+// replaced with the lab-scoped rules before any prod deployment.
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      allow read, write: if true;
+    }
+  }
+}
