@@ -211,6 +211,51 @@
   font-weight: 500;
 }
 
+/* ─────────────────── AMENDED BANNER ─────────────────── *
+   Indicates the report has been republished after correction. NABL
+   requires every amendment to be clearly identified on the printed
+   document so the receiving doctor doesn't act on superseded values. */
+.amended-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 10px 14px;
+  background: #fef3c7;
+  border: 1.5px solid #fbbf24;
+  border-left-width: 5px;
+  border-radius: 4px;
+  color: #78350f;
+  font-size: 10pt;
+  line-height: 1.4;
+}
+
+.amended-banner .icon {
+  flex-shrink: 0;
+  font-size: 14pt;
+  font-weight: 900;
+  line-height: 1;
+  color: #b45309;
+}
+
+.amended-banner .title {
+  font-weight: 700;
+  font-size: 10.5pt;
+  letter-spacing: 0.4px;
+  color: #78350f;
+  text-transform: uppercase;
+}
+
+.amended-banner .body {
+  margin-top: 2px;
+  color: #92400e;
+  font-weight: 500;
+}
+
+.amended-banner .body strong {
+  font-weight: 700;
+}
+
 /* ─────────────────── PATIENT BLOCK ─────────────────── */
 .patient-block {
   border: 1px solid var(--report-rule);
@@ -727,8 +772,15 @@
   .patient-block,
   .collection-block,
   .critical-banner,
+  .amended-banner,
   .notes-section {
     page-break-inside: avoid;
+  }
+  /* Each extra test in a multi-test visit print starts on its own
+     printed page so the doctor can hand the relevant page to whoever
+     consults next without it bleeding into the previous test. */
+  .visit-test-break {
+    page-break-before: always;
   }
   /* Watermark must still render at print time */
   .print-page::before {

@@ -5,7 +5,6 @@ import {
   FilePlus2,
   Layers,
   MoreHorizontal,
-  Pencil,
   Search,
   Wallet,
   X,
@@ -858,12 +857,6 @@ function ReportsPageContent() {
                             render={<Link href={`/reports/${r.id}`} />}
                           >
                             View report
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            render={<Link href={`/reports/${r.id}/edit`} />}
-                          >
-                            <Pencil className="mr-2 h-4 w-4" />
-                            Edit
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
                           <DropdownMenuItem

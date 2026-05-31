@@ -106,6 +106,17 @@ const PatchReportSchema = z.object({
     ])
     .optional(),
   sampleNote: z.preprocess(blankToUndefined, z.string().max(500).optional()),
+  // Per-report TAT override (minutes). Capped at 30 days so a stray
+  // input can't silently disable the overdue alarm. `null` is a sentinel
+  // for "clear the override" — translated to FieldValue.delete() below
+  // so the report falls back to the catalog TAT.
+  tatMinutes: z
+    .number()
+    .int()
+    .positive()
+    .max(60 * 24 * 30)
+    .nullable()
+    .optional(),
   criticalsAcknowledged: z.boolean().optional(),
   criticalsAcknowledgedAt: z.string().max(40).optional(),
   criticalsAcknowledgedBy: AuditStampSchema.optional(),
@@ -153,10 +164,14 @@ export async function PATCH(
     }
 
     // Strip undefined keys so Firestore doesn't reject the write —
-    // and so we don't accidentally clear unrelated fields.
+    // and so we don't accidentally clear unrelated fields. Explicit
+    // `null` on a nullable field (currently just `tatMinutes`) becomes
+    // FieldValue.delete() so the field is actually removed and the
+    // catalog default takes over again.
     const update: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(body)) {
-      if (v !== undefined) update[k] = v;
+      if (v === undefined) continue;
+      update[k] = v === null ? FieldValue.delete() : v;
     }
 
     await ref.update(update);

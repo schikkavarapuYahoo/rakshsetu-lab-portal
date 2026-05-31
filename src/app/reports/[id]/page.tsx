@@ -29,7 +29,7 @@ import {
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import * as React from "react";
-import { use, useEffect, useState } from "react";
+import { use, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { ReportProgress } from "@/components/reports/report-progress";
@@ -81,7 +81,12 @@ import {
   type SampleCondition,
 } from "@/lib/stores/reports";
 import { useBillingStore } from "@/lib/stores/billing";
-import { useLabCatalogStore } from "@/lib/stores/lab-catalog";
+import { useLabCatalogStore, type LabTest } from "@/lib/stores/lab-catalog";
+import { MASTER_TEST_LIBRARY } from "@/config/master-tests";
+import { qualitativeOptionsForRange } from "@/lib/utils/qualitative-options";
+import { useTickingNow } from "@/hooks/use-ticking-now";
+import { getTatState } from "@/lib/utils/tat";
+import { TatChip } from "@/components/reports/tat-chip";
 import { useLabProfileStore } from "@/lib/stores/lab-profile";
 import { WhatsAppPreviewDialog } from "@/components/reports/whatsapp-preview-dialog";
 import { flagForValue } from "@/lib/utils/auto-flag";
@@ -153,10 +158,13 @@ export default function ReportDetailPage({
   const collectSample = useReportsStore((s) => s.collectSample);
   const startTesting = useReportsStore((s) => s.startTesting);
   const sendForReview = useReportsStore((s) => s.sendForReview);
+  const reopenForCorrection = useReportsStore((s) => s.reopenForCorrection);
+  const amendPublished = useReportsStore((s) => s.amendPublished);
   const publish = useReportsStore((s) => s.publish);
   const cancel = useReportsStore((s) => s.cancel);
   const updateReport = useReportsStore((s) => s.updateReport);
   const acknowledgeCriticals = useReportsStore((s) => s.acknowledgeCriticals);
+  const clearTatMinutes = useReportsStore((s) => s.clearTatMinutes);
   const sendToPatient = useReportsStore((s) => s.sendToPatient);
   const recordPayment = useReportsStore((s) => s.recordPayment);
   const refundPayment = useReportsStore((s) => s.refundPayment);
@@ -168,6 +176,8 @@ export default function ReportDetailPage({
   const [collectDialogOpen, setCollectDialogOpen] = useState(false);
   const [refundDialogOpen, setRefundDialogOpen] = useState(false);
   const [whatsappDialogOpen, setWhatsappDialogOpen] = useState(false);
+  const [editTimerDialogOpen, setEditTimerDialogOpen] = useState(false);
+  const [amendDialogOpen, setAmendDialogOpen] = useState(false);
 
   if (!hasHydrated) {
     return (
@@ -200,15 +210,45 @@ export default function ReportDetailPage({
     sampleId: string;
     sampleCondition: SampleCondition;
     sampleNote?: string;
+    tatMinutes?: number;
   }) {
     const updated = safeRun("Could not mark sample collected", () =>
       collectSample(report!.id, opts),
     );
     if (updated) {
+      const timerSuffix =
+        typeof opts.tatMinutes === "number"
+          ? ` · timer ${formatTatDuration(opts.tatMinutes)}`
+          : "";
       toast.success(`Sample ${updated.sampleId ?? "collected"}`, {
-        description: `Condition: ${SAMPLE_CONDITION_LABEL[opts.sampleCondition]}`,
+        description: `Condition: ${SAMPLE_CONDITION_LABEL[opts.sampleCondition]}${timerSuffix}`,
       });
       setCollectDialogOpen(false);
+    }
+  }
+
+  function onSaveTimer(tatMinutes: number) {
+    const updated = safeRun("Could not update timer", () =>
+      updateReport(report!.id, { tatMinutes }),
+    );
+    if (updated) {
+      toast.success(`Timer set to ${formatTatDuration(tatMinutes)}`);
+      setEditTimerDialogOpen(false);
+    }
+  }
+
+  function onClearTimer() {
+    const updated = safeRun("Could not clear timer override", () =>
+      clearTatMinutes(report!.id),
+    );
+    if (updated) {
+      toast.success("Reverted to catalog default", {
+        description:
+          typeof labTest?.turnaroundMinutes === "number"
+            ? `Now using ${formatTatDuration(labTest.turnaroundMinutes)}`
+            : "No catalog TAT — countdown disabled",
+      });
+      setEditTimerDialogOpen(false);
     }
   }
 
@@ -224,6 +264,29 @@ export default function ReportDetailPage({
       sendForReview(report!.id),
     );
     if (updated) toast.success("Report ready for review");
+  }
+
+  function onReopenForCorrection() {
+    const updated = safeRun("Could not reopen", () =>
+      reopenForCorrection(report!.id),
+    );
+    if (updated) {
+      toast.success("Reopened for editing", {
+        description: "Fix the values, then send for review again.",
+      });
+    }
+  }
+
+  function onAmend(reason: string) {
+    const updated = safeRun("Could not amend report", () =>
+      amendPublished(report!.id, reason),
+    );
+    if (updated) {
+      toast.success("Report reopened for amendment", {
+        description: "Fix the values and republish; the print will show AMENDED.",
+      });
+      setAmendDialogOpen(false);
+    }
   }
 
   function onPublish() {
@@ -454,6 +517,20 @@ export default function ReportDetailPage({
               Print / PDF
             </Link>
           )}
+          {/* "Print all visit tests" — only when this visit actually has
+              more than one test. Lets the receptionist hand the patient
+              one consolidated PDF (CBC + Lipid + Thyroid on one signed
+              document) instead of N separate single-test reports. */}
+          {report.status !== "Cancelled" && siblings.length > 0 && (
+            <Link
+              href={`/reports/visit/${report.visitId}/print`}
+              title={`Consolidated PDF for all ${siblings.length + 1} tests in this visit`}
+              className="bg-brand-600 hover:bg-brand-700 inline-flex h-9 items-center gap-1.5 rounded-lg px-3.5 text-sm font-medium text-white shadow-sm transition-colors"
+            >
+              <Printer className="h-4 w-4" />
+              Print visit ({siblings.length + 1} tests)
+            </Link>
+          )}
           {report.payment && (
             <Link
               href={`/reports/${report.id}/receipt`}
@@ -462,15 +539,6 @@ export default function ReportDetailPage({
             >
               <Receipt className="h-4 w-4" />
               Receipt
-            </Link>
-          )}
-          {report.status !== "Published" && report.status !== "Cancelled" && (
-            <Link
-              href={`/reports/${report.id}/edit`}
-              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-3.5 text-sm font-medium text-neutral-700 shadow-sm transition-colors hover:bg-neutral-50"
-            >
-              <Pencil className="h-4 w-4" />
-              Edit
             </Link>
           )}
         </div>
@@ -496,6 +564,8 @@ export default function ReportDetailPage({
           onCollectSampleClick={() => setCollectDialogOpen(true)}
           onStartTesting={onStartTesting}
           onSendForReview={onSendForReview}
+          onReopenForCorrection={onReopenForCorrection}
+          onAmendClick={() => setAmendDialogOpen(true)}
           onPublish={onPublish}
           onCancelClick={() => setCancelDialogOpen(true)}
           onSendToPatient={onSendToPatient}
@@ -509,12 +579,24 @@ export default function ReportDetailPage({
           onRefundClick={() => setRefundDialogOpen(true)}
         />
 
-        {/* Meta strip */}
-        <div className="grid gap-4 border-t border-neutral-100 px-6 py-4 sm:grid-cols-2 lg:grid-cols-4">
+        {/* Meta strip — doctor/hospital already shown in the header, so
+            don't repeat them here; the technician's focus on this page is
+            timing and result entry. */}
+        <div className="grid gap-4 border-t border-neutral-100 px-6 py-4 sm:grid-cols-3">
           <MetaCell
             icon={<Calendar className="h-4 w-4" />}
             label="Sample collected"
-            value={formatDateOnly(report.collectedAt)}
+            value={(() => {
+              // The actual collection-event timestamp from the status
+              // history is the single source of truth — the receptionist's
+              // typed `collectedAt` date is only a fallback for legacy
+              // rows that pre-date the explicit "Collect Sample" action.
+              const collectedEvent = report.statusHistory.find(
+                (h) => h.status === "Sample Collected",
+              );
+              if (collectedEvent) return formatStamp(collectedEvent.at);
+              return formatDateOnly(report.collectedAt);
+            })()}
           />
           <MetaCell
             icon={<CalendarCheck className="h-4 w-4" />}
@@ -523,15 +605,6 @@ export default function ReportDetailPage({
               report.publishedAt
                 ? formatStamp(report.publishedAt)
                 : formatDateOnly(report.reportedAt)
-            }
-          />
-          <MetaCell
-            icon={<User className="h-4 w-4" />}
-            label="Prescribing doctor"
-            value={
-              [report.requestingDoctor, report.referringHospital]
-                .filter((s): s is string => Boolean(s))
-                .join(" · ") || "—"
             }
           />
           <MetaCell
@@ -544,8 +617,15 @@ export default function ReportDetailPage({
         {/* Sample tracking — only shown once a sample is on file. The
             tube label, condition, and any collection note live here so
             the technician downstream knows what physically arrived. */}
-        {(report.sampleId || report.sampleCondition || report.sampleNote) && (
-          <SampleSummary report={report} />
+        {(report.sampleId ||
+          report.sampleCondition ||
+          report.sampleNote ||
+          typeof report.tatMinutes === "number") && (
+          <SampleSummary
+            report={report}
+            labTest={labTest}
+            onEditTimerClick={() => setEditTimerDialogOpen(true)}
+          />
         )}
 
         {/* Check-in snapshot — what the receptionist captured when the
@@ -582,7 +662,7 @@ export default function ReportDetailPage({
             />
           ) : report.results.length === 0 ? (
             <div className="rounded-lg border border-dashed border-neutral-300 bg-neutral-50/60 px-4 py-10 text-center text-sm text-neutral-500">
-              No result rows yet. Edit the report to add entries.
+              No result rows yet.
             </div>
           ) : (
             <div className="overflow-hidden rounded-lg border border-neutral-200">
@@ -660,16 +740,14 @@ export default function ReportDetailPage({
             </div>
           )}
 
-          {report.notes && (
-            <div className="mt-6">
-              <h3 className="text-xs font-semibold tracking-wide text-neutral-600 uppercase">
-                Notes
-              </h3>
-              <p className="mt-1 text-sm whitespace-pre-line text-neutral-700">
-                {report.notes}
-              </p>
-            </div>
-          )}
+          <InlineNotesEditor
+            report={report}
+            onSave={(value) => {
+              safeRun("Could not update notes", () =>
+                updateReport(report.id, { notes: value || undefined }),
+              );
+            }}
+          />
         </div>
 
         {/* Audit timeline */}
@@ -719,7 +797,27 @@ export default function ReportDetailPage({
         open={collectDialogOpen}
         onOpenChange={setCollectDialogOpen}
         report={report}
+        defaultTatMinutes={labTest?.turnaroundMinutes}
         onSubmit={onCollectSample}
+      />
+
+      {/* Adjust-timer dialog — lets the technician revise the TAT after the
+          sample has already been collected (e.g. analyzer queue is now
+          backed up and the original estimate is wrong). */}
+      <EditTimerDialog
+        open={editTimerDialogOpen}
+        onOpenChange={setEditTimerDialogOpen}
+        report={report}
+        catalogTatMinutes={labTest?.turnaroundMinutes}
+        onSubmit={onSaveTimer}
+        onClear={onClearTimer}
+      />
+
+      <AmendReportDialog
+        open={amendDialogOpen}
+        onOpenChange={setAmendDialogOpen}
+        report={report}
+        onSubmit={onAmend}
       />
 
       {/* Cancel confirmation dialog */}
@@ -837,6 +935,8 @@ function ActionPanel({
   onCollectSampleClick,
   onStartTesting,
   onSendForReview,
+  onReopenForCorrection,
+  onAmendClick,
   onPublish,
   onCancelClick,
   onSendToPatient,
@@ -846,6 +946,8 @@ function ActionPanel({
   onCollectSampleClick: () => void;
   onStartTesting: () => void;
   onSendForReview: () => void;
+  onReopenForCorrection: () => void;
+  onAmendClick: () => void;
   onPublish: () => void;
   onCancelClick: () => void;
   onSendToPatient: (channel: "whatsapp" | "email" | "sms") => void;
@@ -869,8 +971,14 @@ function ActionPanel({
     );
   }
 
+  // "Needs results" guards the Mark Ready for Review action — it stays
+  // disabled until the technician has entered at least one non-empty
+  // value. Just adding empty rows (parameter but no value) shouldn't
+  // unlock the next status; matches the same threshold the inline
+  // editor uses for its "Save & send for review" button.
   const needsResults =
-    report.status === "Waiting for Results" && report.results.length === 0;
+    report.status === "Waiting for Results" &&
+    !report.results.some((r) => r.value.trim() !== "");
 
   return (
     <div className="flex flex-wrap items-center gap-2 border-b border-neutral-100 bg-neutral-50/40 px-6 py-3">
@@ -896,12 +1004,9 @@ function ActionPanel({
             <ArrowRight className="ml-1 h-4 w-4" />
           </PrimaryAction>
           {needsResults && (
-            <Link
-              href={`/reports/${report.id}/edit`}
-              className="text-sm font-medium text-amber-700 hover:underline"
-            >
-              Add results first →
-            </Link>
+            <span className="text-sm font-medium text-amber-700">
+              Add results below first
+            </span>
           )}
         </>
       )}
@@ -916,6 +1021,15 @@ function ActionPanel({
             <Check className="mr-1 h-4 w-4" />
             Publish Report
           </PrimaryAction>
+          <button
+            type="button"
+            onClick={onReopenForCorrection}
+            title="Move back to Waiting for Results so the values can be edited"
+            className="inline-flex h-9 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-3.5 text-sm font-medium text-neutral-700 shadow-sm transition-colors hover:bg-neutral-50"
+          >
+            <Pencil className="h-4 w-4" />
+            Edit results
+          </button>
           {publishBlockedReason && (
             <span className="text-xs text-neutral-500">
               {publishBlockedReason}
@@ -925,10 +1039,21 @@ function ActionPanel({
       )}
 
       {report.status === "Published" && (
-        <SendToPatientControl
-          report={report}
-          onSendToPatient={onSendToPatient}
-        />
+        <>
+          <SendToPatientControl
+            report={report}
+            onSendToPatient={onSendToPatient}
+          />
+          <button
+            type="button"
+            onClick={onAmendClick}
+            title="Reopen this published report to correct a value. The next print will show an AMENDED stamp."
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-3.5 text-sm font-medium text-neutral-700 shadow-sm transition-colors hover:bg-neutral-50"
+          >
+            <Pencil className="h-4 w-4" />
+            Amend report
+          </button>
+        </>
       )}
 
       <div className="ml-auto">
@@ -1770,18 +1895,103 @@ function InlineResultsEditor({
   onSave: (rows: ResultRow[]) => void;
   onSaveAndReview: (rows: ResultRow[]) => void;
 }) {
+  // Build a parameter-name → {unit, referenceRange} index so typing
+  // "Hemoglobin" in a blank row auto-fills "g/dL" and "13.0 - 17.0".
+  // Priority (highest → lowest):
+  //   1. The current report's catalog test — the lab's own overrides win.
+  //   2. Every other test in the lab catalog — catches parameters that
+  //      show up under multiple panels (e.g. Glucose in HbA1c and KFT).
+  //   3. The master library shipped with the app — fallback for any
+  //      catalog row that lost its parameters (e.g. the empty-params
+  //      pilot data we just healed).
+  // Case-insensitive; first match wins.
+  const catalogTests = useLabCatalogStore((s) => s.tests);
+  const parameterIndex = useMemo(() => {
+    const map = new Map<string, { unit?: string; referenceRange?: string }>();
+    function add(
+      name: string,
+      unit: string | undefined,
+      referenceRange: string | undefined,
+    ) {
+      const key = name.trim().toLowerCase();
+      if (!key) return;
+      if (map.has(key)) return; // first wins → respects priority order
+      map.set(key, { unit, referenceRange });
+    }
+    const currentCode = report.testCode?.toUpperCase();
+    // Priority 1: this report's own test.
+    if (currentCode) {
+      for (const t of catalogTests) {
+        if (t.code.toUpperCase() !== currentCode) continue;
+        for (const p of t.parameters)
+          add(p.parameter, p.unit, p.referenceRange);
+      }
+    }
+    // Priority 2: every other catalog test.
+    for (const t of catalogTests) {
+      if (currentCode && t.code.toUpperCase() === currentCode) continue;
+      for (const p of t.parameters)
+        add(p.parameter, p.unit, p.referenceRange);
+    }
+    // Priority 3: master library (safety net for healed/empty catalogs).
+    for (const m of MASTER_TEST_LIBRARY) {
+      for (const p of m.parameters)
+        add(p.parameter, p.unit, p.referenceRange);
+    }
+    return map;
+  }, [catalogTests, report.testCode]);
+
   const [rows, setRows] = useState<EditableRow[]>(() =>
-    report.results.map((r) => ({
-      id: r.id,
-      parameter: r.parameter,
-      value: r.value ?? "",
-      unit: r.unit ?? "",
-      referenceRange: r.referenceRange ?? "",
-      flag: r.flag ?? "",
-      notes: r.notes,
-      autoFlagged: false,
-      autoDerived: false,
-    })),
+    report.results.map((r) => {
+      // Backfill unit / range for legacy rows that were saved before
+      // the catalog had parameter metadata. Only writes when the cell
+      // is empty so any manual override is preserved.
+      let unit = r.unit ?? "";
+      let referenceRange = r.referenceRange ?? "";
+      const rangeWasEmpty = !referenceRange;
+      if (!unit || !referenceRange) {
+        const lookup = parameterIndex.get(r.parameter.trim().toLowerCase());
+        if (lookup) {
+          if (!unit && lookup.unit) unit = lookup.unit;
+          if (!referenceRange && lookup.referenceRange)
+            referenceRange = lookup.referenceRange;
+        }
+      }
+      // Re-evaluate the flag against the (possibly just-backfilled)
+      // reference range. Persisted flags can drift out of sync for
+      // multiple reasons:
+      //   - The flag was set against an empty range and is now wrong
+      //     after the range backfill landed.
+      //   - An earlier auto-flag pass produced a wrong answer that
+      //     was silently saved.
+      //   - The reference range itself was edited later.
+      // Critical is treated as a manual override — once a technician
+      // escalates a value to Critical, never silently downgrade it.
+      let flag: EditableRow["flag"] = r.flag ?? "";
+      let autoFlagged = false;
+      if (
+        flag !== "Critical" &&
+        referenceRange &&
+        (r.value ?? "").trim() !== ""
+      ) {
+        const auto = flagForValue(r.value ?? "", referenceRange);
+        if (auto && (rangeWasEmpty || !flag || auto !== flag)) {
+          flag = auto;
+          autoFlagged = true;
+        }
+      }
+      return {
+        id: r.id,
+        parameter: r.parameter,
+        value: r.value ?? "",
+        unit,
+        referenceRange,
+        flag,
+        notes: r.notes,
+        autoFlagged,
+        autoDerived: false,
+      };
+    }),
   );
 
   function updateRow(idx: number, patch: Partial<EditableRow>) {
@@ -1794,11 +2004,34 @@ function InlineResultsEditor({
         const next: EditableRow = { ...r, ...patch };
         if ("flag" in patch) next.autoFlagged = false;
         if ("value" in patch) next.autoDerived = false;
+        // Auto-fill unit / range when the technician types a known
+        // parameter name into a fresh row. Only writes when the cell
+        // is empty so manual overrides are never clobbered.
+        if (typeof patch.parameter === "string") {
+          const lookup = parameterIndex.get(
+            patch.parameter.trim().toLowerCase(),
+          );
+          if (lookup) {
+            if (!next.unit && lookup.unit) next.unit = lookup.unit;
+            if (!next.referenceRange && lookup.referenceRange)
+              next.referenceRange = lookup.referenceRange;
+          }
+        }
+        // Re-evaluate the flag on any value/range edit, treating only
+        // Critical as a sticky manual override. Without this, a
+        // previously auto-flagged Low row that loaded with the flag
+        // already set (autoFlagged was reset to false on hydration)
+        // stays Low even after the value is corrected into normal
+        // range — exactly the Platelet Count 140→240 bug. Critical is
+        // never silently downgraded because a tech sets it deliberately
+        // when escalating to the doctor.
         if ("value" in patch || "referenceRange" in patch) {
-          if (!next.flag || next.autoFlagged) {
+          if (next.flag !== "Critical") {
             const auto = flagForValue(next.value, next.referenceRange);
-            next.flag = auto ?? "";
-            next.autoFlagged = Boolean(auto);
+            if (auto) {
+              next.flag = auto;
+              next.autoFlagged = true;
+            }
           }
         }
         return next;
@@ -1862,6 +2095,14 @@ function InlineResultsEditor({
             {rows.map((row, idx) => {
               const flagTone = row.flag ? FLAG_TONE[row.flag] : null;
               const isCritical = row.flag === "Critical";
+              // Industrial-standard qualitative dropdown — when the
+              // reference range matches a known categorical pattern
+              // (CLSI dipstick, WHO serology, antibiogram, etc.), the
+              // value cell becomes a constrained select so the
+              // technician can't typo "Rective" instead of "Reactive".
+              const qualitative = qualitativeOptionsForRange(
+                row.referenceRange,
+              );
               return (
                 <tr
                   key={row.id}
@@ -1872,21 +2113,48 @@ function InlineResultsEditor({
                     row.flag === "Low" && "bg-sky-50/30",
                   )}
                 >
-                  <td className="px-3 py-2 text-sm font-medium text-neutral-900">
-                    {row.parameter}
-                  </td>
                   <td className="px-2 py-1.5">
                     <input
-                      value={row.value}
+                      value={row.parameter}
                       onChange={(e) =>
-                        updateRow(idx, { value: e.target.value })
+                        updateRow(idx, { parameter: e.target.value })
                       }
-                      placeholder="—"
-                      className={cn(
-                        "focus:border-brand-500 focus:ring-brand-500/20 w-full rounded-md border border-transparent bg-transparent px-2 py-1.5 text-sm tabular-nums outline-none focus:ring-2",
-                        isCritical && "font-semibold text-red-700",
-                      )}
+                      placeholder="Parameter"
+                      className="focus:border-brand-500 focus:ring-brand-500/20 w-full rounded-md border border-transparent bg-transparent px-2 py-1.5 text-sm font-medium text-neutral-900 outline-none focus:ring-2"
                     />
+                  </td>
+                  <td className="px-2 py-1.5">
+                    {qualitative ? (
+                      <select
+                        value={row.value}
+                        onChange={(e) =>
+                          updateRow(idx, { value: e.target.value })
+                        }
+                        className={cn(
+                          "focus:border-brand-500 focus:ring-brand-500/20 w-full rounded-md border border-transparent bg-transparent px-2 py-1.5 text-sm outline-none focus:ring-2",
+                          isCritical && "font-semibold text-red-700",
+                        )}
+                      >
+                        <option value="">—</option>
+                        {qualitative.options.map((opt) => (
+                          <option key={opt} value={opt}>
+                            {opt}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        value={row.value}
+                        onChange={(e) =>
+                          updateRow(idx, { value: e.target.value })
+                        }
+                        placeholder="—"
+                        className={cn(
+                          "focus:border-brand-500 focus:ring-brand-500/20 w-full rounded-md border border-transparent bg-transparent px-2 py-1.5 text-sm tabular-nums outline-none focus:ring-2",
+                          isCritical && "font-semibold text-red-700",
+                        )}
+                      />
+                    )}
                   </td>
                   <td className="px-2 py-1.5">
                     <input
@@ -1950,13 +2218,47 @@ function InlineResultsEditor({
                 </tr>
               );
             })}
+            {rows.length === 0 && (
+              <tr>
+                <td
+                  colSpan={5}
+                  className="text-muted-foreground px-3 py-6 text-center text-sm italic"
+                >
+                  No result rows yet. Click &ldquo;Add row&rdquo; below to
+                  start entering values.
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-muted-foreground text-xs">
-          Flags auto-set as you type. Pick a flag manually to override.
-        </p>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() =>
+              setRows((prev) => [
+                ...prev,
+                {
+                  id: crypto.randomUUID(),
+                  parameter: "",
+                  value: "",
+                  unit: "",
+                  referenceRange: "",
+                  flag: "",
+                  autoFlagged: false,
+                  autoDerived: false,
+                },
+              ])
+            }
+            className="inline-flex h-8 items-center gap-1 rounded-md border border-dashed border-neutral-300 bg-white px-3 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
+          >
+            + Add row
+          </button>
+          <p className="text-muted-foreground text-xs">
+            Flags auto-set as you type. Pick a flag manually to override.
+          </p>
+        </div>
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -1980,7 +2282,96 @@ function InlineResultsEditor({
   );
 }
 
-function SampleSummary({ report }: { report: Report }) {
+function InlineNotesEditor({
+  report,
+  onSave,
+}: {
+  report: Report;
+  onSave: (value: string) => void;
+}) {
+  const locked =
+    report.status === "Published" || report.status === "Cancelled";
+  const [value, setValue] = useState(report.notes ?? "");
+  const [editing, setEditing] = useState(false);
+
+  // Re-sync when the report's notes change externally (server hydrate,
+  // another tab) — but only while the editor isn't actively in use, so
+  // we don't clobber an in-flight edit.
+  useEffect(() => {
+    if (!editing) setValue(report.notes ?? "");
+  }, [report.notes, editing]);
+
+  // Read-only branch for locked statuses and for non-edit mode when
+  // there's nothing to show. Tap the empty placeholder to start editing.
+  if (locked) {
+    if (!report.notes) return null;
+    return (
+      <div className="mt-6">
+        <h3 className="text-xs font-semibold tracking-wide text-neutral-600 uppercase">
+          Notes
+        </h3>
+        <p className="mt-1 text-sm whitespace-pre-line text-neutral-700">
+          {report.notes}
+        </p>
+      </div>
+    );
+  }
+
+  const dirty = (value ?? "") !== (report.notes ?? "");
+
+  return (
+    <div className="mt-6">
+      <h3 className="text-xs font-semibold tracking-wide text-neutral-600 uppercase">
+        Notes
+      </h3>
+      <Textarea
+        value={value}
+        onChange={(e) => {
+          setValue(e.target.value);
+          if (!editing) setEditing(true);
+        }}
+        onFocus={() => setEditing(true)}
+        placeholder="Anything the next person picking up this report should know — analyzer ran twice, sample re-drawn, doctor called for confirmation, etc."
+        rows={3}
+        className="mt-1.5"
+      />
+      {dirty && (
+        <div className="mt-2 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              setValue(report.notes ?? "");
+              setEditing(false);
+            }}
+            className="inline-flex h-8 items-center rounded-md border border-neutral-200 bg-white px-3 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              onSave(value.trim());
+              setEditing(false);
+            }}
+            className="bg-brand-600 hover:bg-brand-700 inline-flex h-8 items-center rounded-md px-3 text-xs font-medium text-white shadow-sm"
+          >
+            Save note
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SampleSummary({
+  report,
+  labTest,
+  onEditTimerClick,
+}: {
+  report: Report;
+  labTest: LabTest | undefined;
+  onEditTimerClick: () => void;
+}) {
   // The condition pill picks up the right tone: green for good,
   // amber for marginal (lipemic), red for hard problems (hemolyzed,
   // insufficient, clotted, contaminated).
@@ -1993,6 +2384,21 @@ function SampleSummary({ report }: { report: Report }) {
         : condition
           ? "bg-red-50 text-red-700 ring-red-200"
           : null;
+
+  // Live countdown — keeps the chip ticking so the technician can glance
+  // at the report page and see "due in 12m" without a refresh.
+  const now = useTickingNow(30_000);
+  const tatState = getTatState(report, labTest, now);
+  const effectiveTatMinutes =
+    report.tatMinutes ?? labTest?.turnaroundMinutes;
+  const isOverride =
+    typeof report.tatMinutes === "number" &&
+    report.tatMinutes !== labTest?.turnaroundMinutes;
+  // Edit is meaningful only while the report is in-flight. Once Review /
+  // Published / Cancelled, the TAT no longer affects anyone.
+  const canEditTimer =
+    report.status === "Sample Collected" ||
+    report.status === "Waiting for Results";
 
   return (
     <div className="border-t border-neutral-100 bg-neutral-50/40 px-6 py-4">
@@ -2016,6 +2422,33 @@ function SampleSummary({ report }: { report: Report }) {
             >
               {SAMPLE_CONDITION_LABEL[condition]}
             </span>
+          </div>
+        )}
+        {canEditTimer && (
+          <div className="flex items-center gap-1.5">
+            <span className="text-muted-foreground text-xs">Timer</span>
+            {tatState.status !== "not-applicable" ? (
+              <TatChip state={tatState} compact />
+            ) : (
+              <span className="text-xs text-neutral-500">
+                {typeof effectiveTatMinutes === "number"
+                  ? formatTatDuration(effectiveTatMinutes)
+                  : "—"}
+              </span>
+            )}
+            {typeof effectiveTatMinutes === "number" && (
+              <span className="text-muted-foreground text-xs">
+                ({formatTatDuration(effectiveTatMinutes)}
+                {isOverride ? ", custom" : ""})
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={onEditTimerClick}
+              className="text-brand-700 hover:text-brand-800 text-xs font-medium underline-offset-2 hover:underline"
+            >
+              Edit
+            </button>
           </div>
         )}
       </div>
@@ -2083,19 +2516,36 @@ function CheckInSummary({ checkIn }: { checkIn: CheckInVitals }) {
 //  Collect-sample dialog
 // ────────────────────────────────────────────────────────────────────────────
 
+/** Quick-pick timer values shown as preset chips in the Collect dialog. */
+const TAT_PRESETS_MIN: number[] = [30, 60, 120, 240, 1440];
+
+/** "90m" → "1h 30m"; "1440" → "24h"; "45" → "45m". For UI labels & toasts. */
+function formatTatDuration(minutes: number): string {
+  if (!Number.isFinite(minutes) || minutes <= 0) return "—";
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (h === 0) return `${m}m`;
+  if (m === 0) return `${h}h`;
+  return `${h}h ${m}m`;
+}
+
 function CollectSampleDialog({
   open,
   onOpenChange,
   report,
+  defaultTatMinutes,
   onSubmit,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   report: Report;
+  /** Catalog TAT for this test, used to pre-fill the timer. */
+  defaultTatMinutes: number | undefined;
   onSubmit: (opts: {
     sampleId: string;
     sampleCondition: SampleCondition;
     sampleNote?: string;
+    tatMinutes?: number;
   }) => void;
 }) {
   // Sample ID auto-derives from the report code (R20260028 →
@@ -2106,14 +2556,37 @@ function CollectSampleDialog({
   const sampleId = report.reportCode.replace(/^R/, "S");
   const [condition, setCondition] = useState<SampleCondition>("good");
   const [note, setNote] = useState("");
+  // Timer state: number of minutes from now until results are due. Pre-filled
+  // from the catalog's turnaround minutes (falls back to 60). Stored as a
+  // string so the custom input can be cleared while typing.
+  const initialTat = defaultTatMinutes ?? 60;
+  const [tatMinutesInput, setTatMinutesInput] = useState<string>(
+    String(initialTat),
+  );
 
   // Reset when the dialog reopens (e.g. user cancelled and reopened).
   useEffect(() => {
     if (open) {
       setCondition("good");
       setNote("");
+      setTatMinutesInput(String(defaultTatMinutes ?? 60));
     }
-  }, [open]);
+  }, [open, defaultTatMinutes]);
+
+  const parsedTatMinutes = (() => {
+    const n = Number.parseInt(tatMinutesInput, 10);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  })();
+
+  // Live "due by HH:MM" preview — shown so the technician can sanity-check
+  // the timer against the wall clock before committing.
+  const dueByLabel = parsedTatMinutes
+    ? new Date(Date.now() + parsedTatMinutes * 60_000).toLocaleString([], {
+        weekday: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : null;
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -2121,6 +2594,7 @@ function CollectSampleDialog({
       sampleId,
       sampleCondition: condition,
       sampleNote: note.trim() || undefined,
+      tatMinutes: parsedTatMinutes ?? undefined,
     });
   }
 
@@ -2185,6 +2659,61 @@ function CollectSampleDialog({
 
           <div className="space-y-1.5">
             <label
+              htmlFor="sample-tat"
+              className="text-xs font-medium tracking-wide text-neutral-600 uppercase"
+            >
+              Timer (results due in)
+            </label>
+            <div className="flex flex-wrap gap-1.5">
+              {TAT_PRESETS_MIN.map((m) => {
+                const active = parsedTatMinutes === m;
+                return (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => setTatMinutesInput(String(m))}
+                    className={cn(
+                      "rounded-md border px-2.5 py-1 text-xs font-medium transition-colors",
+                      active
+                        ? "border-brand-500 bg-brand-50 text-brand-700"
+                        : "border-neutral-200 bg-white text-neutral-700 hover:bg-neutral-50",
+                    )}
+                  >
+                    {formatTatDuration(m)}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                id="sample-tat"
+                type="number"
+                inputMode="numeric"
+                min={1}
+                max={43200}
+                value={tatMinutesInput}
+                onChange={(e) => setTatMinutesInput(e.target.value)}
+                className="focus:border-brand-500 focus:ring-brand-500/20 w-24 rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:ring-2"
+              />
+              <span className="text-xs text-neutral-500">minutes</span>
+              {dueByLabel && (
+                <span className="ml-auto text-xs text-neutral-500">
+                  due by{" "}
+                  <span className="font-medium text-neutral-700">
+                    {dueByLabel}
+                  </span>
+                </span>
+              )}
+            </div>
+            <p className="text-muted-foreground text-xs">
+              {typeof defaultTatMinutes === "number"
+                ? `Catalog default for this test is ${formatTatDuration(defaultTatMinutes)}. Adjust if the analyzer is backed up or this is a stat sample.`
+                : "No catalog default — set a timer so the overdue alarm fires when results should be ready."}
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <label
               htmlFor="sample-note"
               className="text-xs font-medium tracking-wide text-neutral-600 uppercase"
             >
@@ -2213,6 +2742,266 @@ function CollectSampleDialog({
             >
               <TestTube2 className="h-4 w-4" />
               Mark Collected
+            </button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Amend-report dialog (post-publish)
+// ────────────────────────────────────────────────────────────────────────────
+
+function AmendReportDialog({
+  open,
+  onOpenChange,
+  report,
+  onSubmit,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  report: Report;
+  onSubmit: (reason: string) => void;
+}) {
+  const [reason, setReason] = useState("");
+
+  useEffect(() => {
+    if (open) setReason("");
+  }, [open]);
+
+  // Count prior amendments so the dialog can say "Amendment #2" up front
+  // — same heuristic the print template uses: every published transition
+  // beyond the first is an amendment.
+  const priorPublishes = report.statusHistory.filter(
+    (h) => h.status === "Published",
+  ).length;
+  const amendmentNumber = priorPublishes; // 1st publish → next amendment is #1
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const trimmed = reason.trim();
+    if (!trimmed) return;
+    onSubmit(trimmed);
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>
+            Amend report {amendmentNumber > 0 && `(amendment #${amendmentNumber})`}
+          </DialogTitle>
+          <DialogDescription>
+            Reopens this published report so values can be corrected. The
+            reason you enter is permanently recorded in the audit trail
+            and printed on the AMENDED stamp.
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-1.5">
+            <label
+              htmlFor="amend-reason"
+              className="text-xs font-medium tracking-wide text-neutral-600 uppercase"
+            >
+              Reason for amendment <span className="text-red-600">*</span>
+            </label>
+            <Textarea
+              id="amend-reason"
+              rows={3}
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder={
+                'e.g. "Hemoglobin was 13.9 g/dL (not 12.9 — typo). Re-verified against analyzer printout."'
+              }
+              autoFocus
+            />
+            <p className="text-muted-foreground text-xs">
+              NABL: every amendment must be justified with the original
+              and corrected values plus the reason for the change.
+            </p>
+          </div>
+
+          <DialogFooter className="gap-2 sm:gap-2">
+            <button
+              type="button"
+              onClick={() => onOpenChange(false)}
+              className="inline-flex h-10 items-center justify-center rounded-md border border-neutral-200 bg-white px-4 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={!reason.trim()}
+              className="bg-brand-600 hover:bg-brand-700 inline-flex h-10 items-center justify-center gap-1.5 rounded-md px-5 text-sm font-medium text-white shadow-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Pencil className="h-4 w-4" />
+              Reopen for amendment
+            </button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Edit-timer dialog (post-collection)
+// ────────────────────────────────────────────────────────────────────────────
+
+function EditTimerDialog({
+  open,
+  onOpenChange,
+  report,
+  catalogTatMinutes,
+  onSubmit,
+  onClear,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  report: Report;
+  /** Catalog default — shown as a reference and as a reset target. */
+  catalogTatMinutes: number | undefined;
+  onSubmit: (tatMinutes: number) => void;
+  /** Drop the per-report override; the countdown falls back to the catalog. */
+  onClear: () => void;
+}) {
+  // Pre-fill with the report's existing override, or the catalog default,
+  // or a safe 60-minute fallback if the catalog has no TAT either.
+  const initialTat =
+    report.tatMinutes ?? catalogTatMinutes ?? 60;
+  const [tatMinutesInput, setTatMinutesInput] = useState<string>(
+    String(initialTat),
+  );
+
+  useEffect(() => {
+    if (open) {
+      setTatMinutesInput(String(report.tatMinutes ?? catalogTatMinutes ?? 60));
+    }
+  }, [open, report.tatMinutes, catalogTatMinutes]);
+
+  const parsedTatMinutes = (() => {
+    const n = Number.parseInt(tatMinutesInput, 10);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  })();
+
+  // The countdown anchors to the actual Sample Collected timestamp — so the
+  // preview here shows when the new timer would expire relative to that
+  // moment, not "now". Falls back to now if the report somehow lacks the
+  // collected stamp (legacy data, defensive).
+  const collectedEntry = report.statusHistory.find(
+    (h) => h.status === "Sample Collected",
+  );
+  const collectedAtMs =
+    (collectedEntry && Date.parse(collectedEntry.at)) ||
+    Date.parse(report.createdAt) ||
+    Date.now();
+  const dueByLabel = parsedTatMinutes
+    ? new Date(collectedAtMs + parsedTatMinutes * 60_000).toLocaleString([], {
+        weekday: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : null;
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!parsedTatMinutes) return;
+    onSubmit(parsedTatMinutes);
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Adjust timer</DialogTitle>
+          <DialogDescription>
+            Change how long until results are expected. The countdown
+            re-anchors to when the sample was originally collected.
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-1.5">
+            <label
+              htmlFor="edit-tat"
+              className="text-xs font-medium tracking-wide text-neutral-600 uppercase"
+            >
+              Timer (results due in)
+            </label>
+            <div className="flex flex-wrap gap-1.5">
+              {TAT_PRESETS_MIN.map((m) => {
+                const active = parsedTatMinutes === m;
+                return (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => setTatMinutesInput(String(m))}
+                    className={cn(
+                      "rounded-md border px-2.5 py-1 text-xs font-medium transition-colors",
+                      active
+                        ? "border-brand-500 bg-brand-50 text-brand-700"
+                        : "border-neutral-200 bg-white text-neutral-700 hover:bg-neutral-50",
+                    )}
+                  >
+                    {formatTatDuration(m)}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                id="edit-tat"
+                type="number"
+                inputMode="numeric"
+                min={1}
+                max={43200}
+                value={tatMinutesInput}
+                onChange={(e) => setTatMinutesInput(e.target.value)}
+                className="focus:border-brand-500 focus:ring-brand-500/20 w-24 rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:ring-2"
+              />
+              <span className="text-xs text-neutral-500">minutes</span>
+              {dueByLabel && (
+                <span className="ml-auto text-xs text-neutral-500">
+                  due by{" "}
+                  <span className="font-medium text-neutral-700">
+                    {dueByLabel}
+                  </span>
+                </span>
+              )}
+            </div>
+            {typeof catalogTatMinutes === "number" && (
+              <p className="text-muted-foreground text-xs">
+                Catalog default for this test:{" "}
+                {formatTatDuration(catalogTatMinutes)}
+              </p>
+            )}
+          </div>
+
+          <DialogFooter className="gap-2 sm:gap-2">
+            {typeof report.tatMinutes === "number" && (
+              <button
+                type="button"
+                onClick={onClear}
+                title="Drop the override so this report follows the catalog TAT going forward"
+                className="mr-auto inline-flex h-10 items-center justify-center rounded-md border border-neutral-200 bg-white px-4 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+              >
+                Use catalog default
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => onOpenChange(false)}
+              className="inline-flex h-10 items-center justify-center rounded-md border border-neutral-200 bg-white px-4 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={!parsedTatMinutes}
+              className="bg-brand-600 hover:bg-brand-700 inline-flex h-10 items-center justify-center gap-1.5 rounded-md px-5 text-sm font-medium text-white shadow-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Save timer
             </button>
           </DialogFooter>
         </form>

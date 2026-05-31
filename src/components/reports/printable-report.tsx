@@ -31,6 +31,16 @@ export interface PrintableReportProps {
   report: Report;
   patient: Patient | undefined;
   labProfile: LabProfile;
+  /**
+   * Extra reports from the same visit, rendered as additional test
+   * sections under the shared header + patient + sample blocks. When
+   * present, the critical banner aggregates flags across all reports,
+   * the sample block lists every sample ID, and the footer references
+   * all report codes. Order matters — the cover sections are derived
+   * from the primary `report`, so put the most representative test
+   * first (typically the receptionist's main complaint).
+   */
+  additionalReports?: Report[];
 }
 
 const FASTING_PRINT_LABEL: Record<FastingStatus, string> = {
@@ -75,7 +85,13 @@ export function PrintableReport({
   report,
   patient,
   labProfile,
+  additionalReports = [],
 }: PrintableReportProps) {
+  // Every report rendered on this page — primary first, then the
+  // additional ones from the same visit. Banners and the sample block
+  // aggregate across all of them so the doctor sees one consolidated
+  // safety call-out, not N separate red boxes.
+  const allRenderedReports = [report, ...additionalReports];
   // The lab catalog is the source of truth for sample type + tube colour;
   // we look it up by the test's code so the print stays in sync with
   // whatever the catalog currently says.
@@ -147,10 +163,34 @@ export function PrintableReport({
     Boolean(checkIn.isPregnant) ||
     Boolean(checkIn.lmpDate);
 
-  const criticals = report.results.filter((r) => r.flag === "Critical");
-  const abnormal = report.results.filter(
-    (r) => r.flag === "High" || r.flag === "Low",
+  // Aggregate criticals across every report on this page so the safety
+  // banner stays a single doctor-facing alert (not N stacked boxes).
+  const criticals = allRenderedReports.flatMap((rep) =>
+    rep.results
+      .filter((r) => r.flag === "Critical")
+      .map((r) => ({ parameter: r.parameter, testName: rep.testName })),
   );
+
+  // Amendment detection — a published report that's been re-published has
+  // gone through Published → reopen → Published at least once. We count
+  // the number of "Published" entries in the status history; anything
+  // above 1 means the report was amended. The most recent
+  // "Amendment: <reason>" entry holds the most recent reason.
+  const publishEntries = report.statusHistory.filter(
+    (h) => h.status === "Published",
+  );
+  const amendmentCount = Math.max(0, publishEntries.length - 1);
+  const isAmended = amendmentCount > 0;
+  const lastAmendment = [...report.statusHistory]
+    .reverse()
+    .find((h) => h.note?.startsWith("Amendment:"));
+  const lastAmendmentReason = lastAmendment?.note?.replace(
+    /^Amendment:\s*/,
+    "",
+  );
+  const originalPublishedAt = publishEntries[0]?.at;
+  const latestPublishedAt =
+    publishEntries[publishEntries.length - 1]?.at ?? report.publishedAt;
 
   const doctorLine = [report.requestingDoctor, report.referringHospital]
     .filter((s): s is string => Boolean(s))
@@ -257,6 +297,39 @@ export function PrintableReport({
               {criticals.length > 1 ? "s are" : " is"} flagged Critical:{" "}
               {criticals.map((c) => c.parameter).join(", ")}. The prescribing
               physician should be contacted without delay.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* AMENDED BANNER — every NABL-compliant amended report needs a
+          prominent indicator so the recipient knows the values they
+          previously received have been corrected. We render this above
+          the patient block but below the critical banner. */}
+      {isAmended && (
+        <div className="amended-banner" role="alert">
+          <span className="icon" aria-hidden>
+            ✎
+          </span>
+          <div>
+            <div className="title">
+              AMENDED REPORT (amendment #{amendmentCount})
+            </div>
+            <div className="body">
+              {originalPublishedAt && (
+                <>
+                  Originally published {formatStamp(originalPublishedAt) ?? "—"}.
+                  {" "}
+                </>
+              )}
+              {latestPublishedAt && (
+                <>Reissued {formatStamp(latestPublishedAt) ?? "—"}. </>
+              )}
+              {lastAmendmentReason && (
+                <>
+                  <strong>Reason:</strong> {lastAmendmentReason}
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -404,19 +477,24 @@ export function PrintableReport({
         <section className="collection-block" aria-label="Sample and collection">
           {/* Row 1 — sample identity */}
           <div className="cell">
-            <div className="cell-label">Sample ID</div>
+            <div className="cell-label">
+              Sample ID{additionalReports.length > 0 ? "s" : ""}
+            </div>
             <div className="cell-value sample-id">
-              {report.sampleId ?? "—"}
+              {[report, ...additionalReports]
+                .map((r) => r.sampleId)
+                .filter((s): s is string => Boolean(s))
+                .join(", ") || "—"}
             </div>
           </div>
           <div className="cell">
             <div className="cell-label">Sample Type</div>
-            <div className="cell-value">
-              {labTest?.sampleType ?? "—"}
-              {labTest?.tubeColor && (
-                <span className="cell-hint">· {labTest.tubeColor}</span>
-              )}
-            </div>
+            <div className="cell-value">{labTest?.sampleType ?? "—"}</div>
+            {/* Tube colour is intentionally NOT printed — it's internal
+                phlebotomy information (which colour-top tube to draw into)
+                that confuses patients and adds no clinical value to the
+                reading doctor. Internal sample tracking lives on the
+                requisition slip and the in-app sample block. */}
           </div>
           <div className="cell">
             <div className="cell-label">Condition</div>
@@ -438,66 +516,15 @@ export function PrintableReport({
         </section>
       )}
 
-      {/* TEST TITLE */}
-      <div className="test-title-bar">
-        <h2 className="test-title">
-          {report.testName.toUpperCase()}
-          {report.testCode && (
-            <span className="test-title-sub">
-              {report.testCode.toUpperCase()}
-            </span>
-          )}
-        </h2>
-      </div>
-
-      {/* RESULTS TABLE */}
-      <section className="results-section">
-        <table className="results-table">
-          <thead>
-            <tr>
-              <th className="col-test">Investigation</th>
-              <th className="col-result">Result</th>
-              <th className="col-units">Units</th>
-              <th className="col-range">Biological Reference Interval</th>
-              <th className="col-flag">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {report.results.map((row) => (
-              <PrintableResultRow key={row.id} row={row} />
-            ))}
-          </tbody>
-        </table>
-      </section>
-
-      {/* INTERPRETATION — only when there's something abnormal to call out. */}
-      {(criticals.length > 0 || abnormal.length > 0) && (
-        <section className="interpretation">
-          <strong>Interpretation:</strong>
-          {criticals.length > 0 && (
-            <p className="interp-critical">
-              {criticals.length} parameter
-              {criticals.length > 1 ? "s are" : " is"} at a CRITICAL level —
-              patient should consult their physician without delay.
-            </p>
-          )}
-          {abnormal.length > 0 && (
-            <p className="interp-warning">
-              {abnormal.length} parameter
-              {abnormal.length > 1 ? "s are" : " is"} outside the reference
-              interval. Please correlate clinically.
-            </p>
-          )}
-        </section>
-      )}
-
-      {/* NOTES */}
-      {report.notes && (
-        <section className="notes-section">
-          <strong>Lab Notes:</strong>
-          <p>{report.notes}</p>
-        </section>
-      )}
+      <ReportTestSection report={report} />
+      {/* Additional same-visit tests stack under the primary one with a
+          page-break hint so each starts cleanly. The doctor reads one
+          patient + sample + N tests + one footer instead of N PDFs. */}
+      {additionalReports.map((extra) => (
+        <div key={extra.id} className="visit-test-break">
+          <ReportTestSection report={extra} />
+        </div>
+      ))}
 
       {/* END OF REPORT */}
       <div className="end-of-report">End of Report</div>
@@ -533,6 +560,80 @@ export function PrintableReport({
         lab.
       </div>
     </div>
+  );
+}
+
+/**
+ * One test's worth of the printed report — title bar, results table,
+ * interpretation paragraph (only when something is abnormal), and the
+ * per-test lab notes. Extracted so the multi-test visit print can render
+ * N of these in sequence under one shared header + patient block.
+ */
+export function ReportTestSection({ report }: { report: Report }) {
+  const criticals = report.results.filter((r) => r.flag === "Critical");
+  const abnormal = report.results.filter(
+    (r) => r.flag === "High" || r.flag === "Low",
+  );
+
+  return (
+    <>
+      <div className="test-title-bar">
+        <h2 className="test-title">
+          {report.testName.toUpperCase()}
+          {report.testCode && (
+            <span className="test-title-sub">
+              {report.testCode.toUpperCase()}
+            </span>
+          )}
+        </h2>
+      </div>
+
+      <section className="results-section">
+        <table className="results-table">
+          <thead>
+            <tr>
+              <th className="col-test">Investigation</th>
+              <th className="col-result">Result</th>
+              <th className="col-units">Units</th>
+              <th className="col-range">Biological Reference Interval</th>
+              <th className="col-flag">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {report.results.map((row) => (
+              <PrintableResultRow key={row.id} row={row} />
+            ))}
+          </tbody>
+        </table>
+      </section>
+
+      {(criticals.length > 0 || abnormal.length > 0) && (
+        <section className="interpretation">
+          <strong>Interpretation:</strong>
+          {criticals.length > 0 && (
+            <p className="interp-critical">
+              {criticals.length} parameter
+              {criticals.length > 1 ? "s are" : " is"} at a CRITICAL level —
+              patient should consult their physician without delay.
+            </p>
+          )}
+          {abnormal.length > 0 && (
+            <p className="interp-warning">
+              {abnormal.length} parameter
+              {abnormal.length > 1 ? "s are" : " is"} outside the reference
+              interval. Please correlate clinically.
+            </p>
+          )}
+        </section>
+      )}
+
+      {report.notes && (
+        <section className="notes-section">
+          <strong>Lab Notes:</strong>
+          <p>{report.notes}</p>
+        </section>
+      )}
+    </>
   );
 }
 

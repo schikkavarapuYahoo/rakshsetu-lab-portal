@@ -53,3 +53,7 @@ auth-debug.log
 # Service-account JSONs (for when real Firebase ships) — never commit.
 *service-account*.json
 *firebase-adminsdk*.json
+
+# Local screenshots from agent-driven verification — useful at dev time,
+# never committed to source.
+.tmp-screenshots/

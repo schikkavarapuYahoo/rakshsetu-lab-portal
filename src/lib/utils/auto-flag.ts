@@ -9,19 +9,18 @@
  *   "> 40"             → lower bound only. Low if value < 40.
  *   "13.0 - 17.0"      → numeric range. Low if <, High if >, Normal in.
  *   "0.4 - 4.0"        → same.
- *   "Negative"         → categorical "should be". Anything else → High.
- *   "Non-reactive"     → same.
- *   "Not seen" / "No growth" → same.
+ *   "Negative"         → urine / stool semi-quant. See qualitative-options.
+ *   "Non-reactive"     → serology binary. Reactive → Critical.
+ *   "Positive / Negative" → Rh typing. Identification only.
+ *   "Sensitive / Resistant" → CLSI M100. Resistant → Critical.
  *
  * Anything we don't recognise (e.g. age/gender-variant strings like
  * "13–17 (male), 12–15 (female)") returns `undefined` — the technician
  * keeps full control of the flag in those cases.
- *
- * Critical thresholds (PRD §6.2) are intentionally NOT computed here.
- * They need a separate per-parameter threshold field on the catalog;
- * for now the technician escalates to Critical manually.
  */
-export type AutoFlag = "Low" | "Normal" | "High";
+import { qualitativeOptionsForRange } from "./qualitative-options";
+
+export type AutoFlag = "Low" | "Normal" | "High" | "Critical";
 
 const CATEGORICAL_EXPECTED = new Set([
   "negative",
@@ -75,7 +74,25 @@ export function flagForValue(
     return undefined;
   }
 
-  // Non-numeric value (e.g. "Positive", "Reactive", "Trace").
+  // Qualitative — prefer the structured schema (urine semi-quant,
+  // serology binary, antibiogram, etc.) when the range matches one of
+  // the standard patterns; that gives us Critical for Reactive and 4+,
+  // not just blanket High.
+  const schema = qualitativeOptionsForRange(range);
+  if (schema?.flagFor) {
+    const exact = schema.flagFor[value];
+    if (exact) return exact === "Critical" ? "Critical" : exact;
+    // Try case-insensitive match against the option list.
+    const match = Object.keys(schema.flagFor).find(
+      (k) => k.toLowerCase() === value.toLowerCase(),
+    );
+    if (match) {
+      const f = schema.flagFor[match];
+      return f === "Critical" ? "Critical" : f;
+    }
+  }
+
+  // Legacy fallback for ranges that we don't model as a full schema.
   // Compare against well-known "should be X" categorical ranges.
   const normalisedRange = range.toLowerCase();
   if (CATEGORICAL_EXPECTED.has(normalisedRange)) {
