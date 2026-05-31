@@ -4,6 +4,7 @@ import { useEffect, useState, use as usePromise } from 'react';
 import Link from 'next/link';
 import { Loader2, AlertCircle, ArrowLeft, KeyRound, Power, AlertTriangle } from 'lucide-react';
 import AdminBillingPanel from './AdminBillingPanel';
+import AdminStaffPanel from './AdminStaffPanel';
 import SubscriptionPanel from './SubscriptionPanel';
 
 interface LabDetail {
@@ -163,6 +164,10 @@ export default function LabDetailPage({ params }: { params: Promise<{ lab_id: st
           </div>
         </div>
       )}
+
+      {/* Per-lab team — every user who can log into this lab's portal.
+          Admin can add/remove on behalf of the lab for support cases. */}
+      <AdminStaffPanel labId={lab.lab_id} />
 
       {/* Round 9: subscription tier panel — admin records cash/UPI
           payments to activate or extend lab's plan. Sits ABOVE the
