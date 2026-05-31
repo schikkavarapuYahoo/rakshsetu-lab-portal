@@ -42,33 +42,45 @@ export async function GET(
       return NextResponse.json({ error: 'You don\'t own this lab' }, { status: 403 });
     }
 
-    // Pull reports for metrics
+    // Pull reports for metrics. The (lab_id, created_at) composite
+    // query needs a Firestore composite index. On a fresh project the
+    // index doesn't exist yet — catch + zero-fill so the detail page
+    // still renders. The lifetime count is a single-field query and
+    // works without an index, but we still wrap defensively to keep
+    // first-day load from 500'ing.
     const now = Date.now();
     const sevenDaysAgo = new Date(now - 7 * 24 * 60 * 60 * 1000);
     const thirtyDaysAgo = new Date(now - 30 * 24 * 60 * 60 * 1000);
 
-    const recentSnap = await db.collection('lab_reports')
-      .where('lab_id', '==', lab_id)
-      .where('created_at', '>=', thirtyDaysAgo)
-      .get();
-
     let last7 = 0, last30 = 0, critical = 0, warning = 0;
-    for (const doc of recentSnap.docs) {
-      const data = doc.data();
-      const ts = data.created_at?.toDate?.();
-      if (!ts) continue;
-      last30 += 1;
-      if (ts >= sevenDaysAgo) last7 += 1;
-      if (data.max_severity === 'critical') critical += 1;
-      else if (data.max_severity === 'warning') warning += 1;
+    try {
+      const recentSnap = await db.collection('lab_reports')
+        .where('lab_id', '==', lab_id)
+        .where('created_at', '>=', thirtyDaysAgo)
+        .get();
+      for (const doc of recentSnap.docs) {
+        const data = doc.data();
+        const ts = data.created_at?.toDate?.();
+        if (!ts) continue;
+        last30 += 1;
+        if (ts >= sevenDaysAgo) last7 += 1;
+        if (data.max_severity === 'critical') critical += 1;
+        else if (data.max_severity === 'warning') warning += 1;
+      }
+    } catch (err) {
+      console.warn('[admin/labs/detail] recent-reports query skipped:', err);
     }
 
-    // Lifetime — separate count, doesn't load full docs
-    const lifetimeSnap = await db.collection('lab_reports')
-      .where('lab_id', '==', lab_id)
-      .count()
-      .get();
-    const lifetimeReports = lifetimeSnap.data().count;
+    let lifetimeReports = 0;
+    try {
+      const lifetimeSnap = await db.collection('lab_reports')
+        .where('lab_id', '==', lab_id)
+        .count()
+        .get();
+      lifetimeReports = lifetimeSnap.data().count;
+    } catch (err) {
+      console.warn('[admin/labs/detail] lifetime count skipped:', err);
+    }
 
     const perReportPaise = lab.per_report_paise ?? 1000;
     const revSharePct = lab.rev_share_pct ?? 60;
